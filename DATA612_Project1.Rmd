@@ -1,0 +1,251 @@
+---
+title: "DATA 612 : Project 1"
+author: "Jerald Melukkaran"
+date: "2026-06-06"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+---
+
+## 1. Introduction 
+
+We are going to build a recommender system that predicts movie recommendantions using data gathered from a 10 by 10 matrix of users and movies. 
+As per the video lectures, we start with the Raw global averages, calculate the RMSE for the test and training data set, and then make the baseline estimate adjusted with the user and movie biases and see if there are any reasonable improvements 
+
+---
+
+## 2. Dataset
+
+```{r build-data}
+library(tidyverse)
+library(reshape2)
+
+set.seed(3)
+
+movies <- c("Inception", "The Matrix", "Interstellar",
+            "The Dark Knight", "Parasite",
+            "Avengers", "Joker", "1917",
+            "Ford v Ferrari", "Knives Out")
+users <- paste0("User", 1:10)
+
+ratings_raw <- matrix(
+  c( 
+    5,   4,   5,   NA,  3,   4,   NA,  3,   4,   5,  
+    3,   2,   NA,  3,   2,   NA,  2,   3,   NA,  2,  
+    4,   4,   3,   4,   NA,  3,   4,   NA,  4,   3,   
+    NA,  5,   4,   5,   4,   5,   NA,  4,   5,   NA, 
+    2,   NA,  2,   3,   2,   NA,  1,   2,   3,   2,   
+    4,   3,   4,   NA,  4,   3,   4,   3,   NA,  4,   
+    NA,  4,   NA,  5,   3,   4,   5,   NA,  4,   5,  
+    3,   3,   4,   3,   NA,  3,   NA,  4,   3,   3,  
+    5,   NA,  5,   4,   5,   4,   4,   5,   NA,  4,  
+    2,   3,   NA,  2,   2,   3,   2,   NA,  2,   3   
+  ),
+  nrow = 10, ncol = 10, byrow = TRUE,
+  dimnames = list(users, movies)
+)
+
+cat("Raw User–Item Matrix:\n")
+print(ratings_raw)
+
+```
+
+---
+
+## 3. Splitting into Testing and Training sets 8:20 
+
+```{r train-test-split}
+ratings_long <- ratings_raw %>%
+  as.data.frame() %>%
+  rownames_to_column("user") %>%
+  pivot_longer(-user, names_to = "item", values_to = "rating") %>%
+  filter(!is.na(rating))
+
+cat("Total observed ratings:", nrow(ratings_long), "\n")
+
+set.seed(123)
+test_idx   <- sample(seq_len(nrow(ratings_long)), size = floor(0.20 * nrow(ratings_long)))
+train_data <- ratings_long[-test_idx, ]
+test_data  <- ratings_long[ test_idx, ]
+
+cat("Training ratings:", nrow(train_data), "\n")
+cat("Test ratings    :", nrow(test_data),  "\n")
+
+# Training set only: This is what we'll use for calculations 
+train_matrix <- train_data %>%
+  pivot_wider(names_from = item, values_from = rating) %>%
+  column_to_rownames("user")
+
+cat("\nTraining Matrix")
+print(train_matrix)
+```
+
+---
+
+## 4. Raw Average Prediction
+
+As per the video, this is our simplest estimate, Basically an average of all available ratings in the training set 
+
+```{r raw-average}
+global_mean <- mean(train_data$rating)
+cat("Global mean rating (training):", round(global_mean, 4), "\n")
+
+train_data <- train_data %>% mutate(pred_raw = global_mean)
+test_data  <- test_data  %>% mutate(pred_raw = global_mean)
+```
+
+### RMSE – Raw Average
+
+Root mean squared error 
+
+Error = Observed - Raw average 
+
+-> then Squared
+
+-> then taken the Mean of 
+
+-> then taken the Square root of '
+
+
+```{r rmse-raw}
+rmse <- function(actual, predicted) sqrt(mean((actual - predicted)^2))
+
+rmse_raw_train <- rmse(train_data$rating, train_data$pred_raw)
+rmse_raw_test  <- rmse(test_data$rating,  test_data$pred_raw)
+
+cat("RMSE Raw Average – Train:", round(rmse_raw_train, 4), "\n")
+cat("RMSE Raw Average – Test :", round(rmse_raw_test,  4), "\n")
+```
+
+
+
+## 5. Bias Calculation
+
+Since the raw average doesent really tell us anything about the users or the movies, we need to introduce bias. This helps us find out how users rate movies, if a specific user is a harsh or easy critic or if a specific movie is generally good or bad.
+
+Bias for User 1 = Average of all their ratings given - Raw average (Positive if User is more lenient, Negative if they are harsher)
+
+Bias for Movie 1 = Average of all their ratings gotten - Raw average (Positive if Movie is generally good, Negative if its bad )
+
+This helps us create the final baseline predictor 
+
+Fina predictor = Raw average + User bias + Movie bias 
+
+```{r biases}
+# User bias
+user_bias <- train_data %>%
+  group_by(user) %>%
+  summarise(user_mean = mean(rating), .groups = "drop") %>%
+  mutate(b_u = user_mean - global_mean)
+
+cat("User Biases:\n")
+print(user_bias %>% select(user, user_mean, b_u) %>% arrange(user))
+
+# Item bias
+item_bias <- train_data %>%
+  left_join(user_bias %>% select(user, b_u), by = "user") %>%
+  mutate(residual = rating - global_mean - b_u) %>%
+  group_by(item) %>%
+  summarise(b_i = mean(residual), .groups = "drop")
+
+cat("\nItem Biases:\n")
+print(item_bias %>% arrange(desc(b_i)))
+```
+
+
+
+---
+
+## 6. Baseline Predictor
+
+
+```{r baseline-predictor}
+# Join biases into training set
+train_data <- train_data %>%
+  left_join(user_bias %>% select(user, b_u), by = "user") %>%
+  left_join(item_bias,                        by = "item") %>%
+  mutate(pred_baseline = pmax(1, pmin(5, global_mean + b_u + b_i)))
+
+# Join biases into test set
+test_data <- test_data %>%
+  left_join(user_bias %>% select(user, b_u), by = "user") %>%
+  left_join(item_bias,                        by = "item") %>%
+  mutate(pred_baseline = pmax(1, pmin(5, global_mean + b_u + b_i)))
+
+cat("Sample baseline predictions (test set):\n")
+test_data %>%
+  select(user, item, rating, pred_raw, pred_baseline) %>%
+  slice_head(n = 10) %>%
+  print()
+```
+
+---
+
+## 7. Full Predicted Matrix
+
+```{r full-matrix}
+# All user–item combinations
+full_grid <- expand.grid(user = users, item = movies, stringsAsFactors = FALSE)
+
+full_preds <- full_grid %>%
+  left_join(user_bias %>% select(user, b_u), by = "user") %>%
+  left_join(item_bias,                        by = "item") %>%
+  mutate(pred_baseline = pmax(1, pmin(5, global_mean + b_u + b_i))) %>%
+  select(user, item, pred_baseline)
+
+pred_matrix <- full_preds %>%
+  pivot_wider(names_from = item, values_from = pred_baseline) %>%
+  column_to_rownames("user")
+
+cat("Full Baseline Prediction Matrix (all user–item pairs):\n")
+print(round(pred_matrix, 2))
+```
+
+---
+
+## 8. RMSE Baseline Predictor
+
+```{r rmse-baseline}
+rmse_bl_train <- rmse(train_data$rating, train_data$pred_baseline)
+rmse_bl_test  <- rmse(test_data$rating,  test_data$pred_baseline)
+
+cat("RMSE Baseline – Train:", round(rmse_bl_train, 4), "\n")
+cat("RMSE Baseline – Test :", round(rmse_bl_test,  4), "\n")
+```
+
+---
+
+## 9. Results
+
+```{r summary-table}
+results <- tibble(
+  Method             = c("Raw Average", "Raw Average", "Baseline Predictor", "Baseline Predictor"),
+  Dataset            = c("Train", "Test", "Train", "Test"),
+  RMSE               = c(rmse_raw_train, rmse_raw_test, rmse_bl_train, rmse_bl_test)
+)
+
+results %>%
+  mutate(RMSE = round(RMSE, 4)) %>%
+  knitr::kable(caption = "RMSE Comparison: Raw Average vs Baseline Predictor")
+```
+
+---
+
+## 10. Interpretation & Conclusions
+
+
+Bias adjustment meaningfully lowers RMSE when compared to using Raw averages. 
+
+When we start to account for the fact that some Users are more generous (User1, User4, User9) and some Movies are better loved (The Dark Knight, Inception), the baseline predictor reduces prediction error on the test set. 
+
+The gap between training and test set in RMSE is also relatively small, so our method estimates generalise well.
