@@ -104,9 +104,11 @@ train_data <- train_data %>% mutate(pred_raw = global_mean)
 test_data  <- test_data  %>% mutate(pred_raw = global_mean)
 ```
 
-### RMSE – Raw Average
 
-Root mean squared error 
+Now we can try two advanced error estimation Methods 
+age
+
+### Root mean squared error 
 
 Error = Observed - Raw average 
 
@@ -116,16 +118,36 @@ Error = Observed - Raw average
 
 -> then taken the Square root of '
 
+### Mean absolute error 
+
+Error = Observed - Predicted 
+
+-> Absolute value taken 
+
+-> Mean taken
+
+
+
+RMSE because errors are squared, punishes large individual mistakes more heavily than small ones.MAE treats every mistake equally regardless of size so it helps us show the usual prediction error a user would actually experience.Comparing the two should give us a better idea on the spread. Ff RMSE is much larger than MAE, it means a few predictions are very far off. If they are close together, errors are spread fairly evenly across predictions.
+
+
+
 
 ```{r rmse-raw}
 rmse <- function(actual, predicted) sqrt(mean((actual - predicted)^2))
+mae  <- function(actual, predicted) mean(abs(actual - predicted))
 
 rmse_raw_train <- rmse(train_data$rating, train_data$pred_raw)
 rmse_raw_test  <- rmse(test_data$rating,  test_data$pred_raw)
+mae_raw_train  <- mae(train_data$rating,  train_data$pred_raw)
+mae_raw_test   <- mae(test_data$rating,   test_data$pred_raw)
 
 cat("RMSE Raw Average – Train:", round(rmse_raw_train, 4), "\n")
 cat("RMSE Raw Average – Test :", round(rmse_raw_test,  4), "\n")
+cat("MAE  Raw Average – Train:", round(mae_raw_train,  4), "\n")
+cat("MAE  Raw Average – Test :", round(mae_raw_test,   4), "\n")
 ```
+
 
 
 
@@ -213,14 +235,18 @@ print(round(pred_matrix, 2))
 
 ---
 
-## 8. RMSE Baseline Predictor
+## 8. RMSE & MAE – Baseline Predictor
 
 ```{r rmse-baseline}
 rmse_bl_train <- rmse(train_data$rating, train_data$pred_baseline)
 rmse_bl_test  <- rmse(test_data$rating,  test_data$pred_baseline)
+mae_bl_train  <- mae(train_data$rating,  train_data$pred_baseline)
+mae_bl_test   <- mae(test_data$rating,   test_data$pred_baseline)
 
 cat("RMSE Baseline – Train:", round(rmse_bl_train, 4), "\n")
 cat("RMSE Baseline – Test :", round(rmse_bl_test,  4), "\n")
+cat("MAE  Baseline – Train:", round(mae_bl_train,  4), "\n")
+cat("MAE  Baseline – Test :", round(mae_bl_test,   4), "\n")
 ```
 
 ---
@@ -229,14 +255,15 @@ cat("RMSE Baseline – Test :", round(rmse_bl_test,  4), "\n")
 
 ```{r summary-table}
 results <- tibble(
-  Method             = c("Raw Average", "Raw Average", "Baseline Predictor", "Baseline Predictor"),
-  Dataset            = c("Train", "Test", "Train", "Test"),
-  RMSE               = c(rmse_raw_train, rmse_raw_test, rmse_bl_train, rmse_bl_test)
+  Method  = c("Raw Average", "Raw Average", "Baseline Predictor", "Baseline Predictor"),
+  Dataset = c("Train", "Test", "Train", "Test"),
+  RMSE    = c(rmse_raw_train, rmse_raw_test, rmse_bl_train, rmse_bl_test),
+  MAE     = c(mae_raw_train,  mae_raw_test,  mae_bl_train,  mae_bl_test)
 )
 
 results %>%
-  mutate(RMSE = round(RMSE, 4)) %>%
-  knitr::kable(caption = "RMSE Comparison: Raw Average vs Baseline Predictor")
+  mutate(RMSE = round(RMSE, 4), MAE = round(MAE, 4)) %>%
+  knitr::kable(caption = "RMSE & MAE: Raw Average vs Baseline Predictor")
 ```
 
 ---
@@ -244,8 +271,18 @@ results %>%
 ## 10. Interpretation & Conclusions
 
 
-Bias adjustment meaningfully lowers RMSE when compared to using Raw averages. 
+Bias adjustment meaningfully lowers both RMSE and MAE when compared to using Raw averages. 
 
 When we start to account for the fact that some Users are more generous (User1, User4, User9) and some Movies are better loved (The Dark Knight, Inception), the baseline predictor reduces prediction error on the test set. 
 
-The gap between training and test set in RMSE is also relatively small, so our method estimates generalise well.
+The gap between training and test set in both metrics is also relatively small, so our method estimates generalise well.
+
+**RMSE vs MAE**
+
+RMSE is always going to be greater than or equal to MAE because squaring amplifies larger errors. The ratio between them tells us about the shape of our errors. Here RMSE is consistently about 0.10–0.15 higher than MAE across every case. That small, stable gap tells us the errors in this model are fairly uniform in size there are no wild outlier predictions dragging RMSE up disproportionaly. Also This suggests our extreme users the very generous and very harsh raters are still producing some bigger errors that bias correction did not fully eliminate.
+
+The ratio between RMSE and AME stays stable even after adding bias correction, meaning the baseline did not introduce any new extreme wrong predictions, it just shifted all errors down uniformly.
+
+Baseline predictor brings MAE down from 0.90 to 0.51 on the test set, meaning on average we are now off by about half a point instead of nearly a full point. That is a meaningful improvement
+
+MAE is easier to communicate , while RMSE is more useful as maybe a safeguard against like recommending a 1 star movie to someone who would probably rate it a 5. Since our RMSE and MAE stay proportional throughout, we can be reasonably confident the model is not producing those kinds of outlier recommendations.
