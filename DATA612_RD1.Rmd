@@ -1,0 +1,51 @@
+---
+title: "DATA612_RD1"
+author: "Jerald Melukkaran"
+date: "2026-06-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+---
+
+## Commercial Recommender : Youtube 
+
+YouTube is probably the common recommender system that people are exposed to. Being a part of the alphabet group lets it borrow from the wealth of experience Google has in collecting data and building complex models for ad serving. 
+
+I believe that the system goes way beyond just people who watched this also watched that kinda model. I think it runs a hybrid system at its core, starting with basic collaborative filtering to match you with users who have similar watch histories, but then probably layering in deeper touch point signals like how long you actually watched something, whether you skipped, whether you came back, whether you saved it to your watch later or any other playlist, or whether you actually took the time out to like or subscribe to the channel.
+
+I feel like the watch time weighting is what makes it actually good, because pure click rate would just reward clickbait. It also probably weighs the number of unique users watching through the videos, and has measures in place to weed out bot watches or click farms. And then Everytime someone clicks on the next recommended video after the one that was just served, it reinforces the algorithm and makes the neural connections stronger. While it stops me prevents me from becoming a break out star even though the family tv youtube account plays my covers on repeat all day, I'm happy with how the youtube recommender dos its job.
+
+### Is it useful? 
+
+For the most part the recommendations feel genuinely useful, it seems to get your taste pretty quickly. But then humans are humans and our attention spans and hobbies and interests change quickly. I feel like Youtube has a pretty strong character trait model of each of its users and tries to categorize them into hybrid bins. My interests often switch between music, gaming, motorcycles, photography, architecture, home renovation, depending on what I'm doing at any moment. In the beginning it seemed to be a little lost whenever I searched for a completely different topic, and the recommendations go a little haywire, but two three videos in and it always seems to autocorrect. 
+
+Though very dystopian sometimes it genuinely feels like its the algorithm deciding what I'm currently interested in and making me jump between my different interests or even switching me to a tangent rather than me looking up something and it adapting. I'd like to believe that my interests are mine alone and not something planted in my brain by a multibillion dollar company looking for possible exploits.
+
+---
+
+## Attacks on Recommender Systems
+
+The Promise case is a pretty wild example of how fragile open rating systems are. Over 60,000 one star ratings came in basically overnight before most people had even seen the film, coordinated by genocide deniers trying to suppress a movie about the Armenian genocide. What makes it messier is that the Armenian community then counter attacked with waves of ten star ratings, so the final score reflected a political battle rather than anything about the actual movie. I think a very similar thing happened with YouTube Rewind 2018 which got mass disliked across Reddit and other forums to the point where YouTube eventually just removed public dislike counts altogether. 
+
+Its often a slippery slope, theres only so much enforcement we can do before its beaten by human creativity or just the basic herd mentality. People like what they like and the hate what they hate. Sometimes its their own decision, sometimes its conformity to the immediate group they are surrounded with. Organic public facing content will always have this issue to deal with. Its the same situation that Movies and other media face when it comes to separating the artist from the art. We need to strike an ideal balance between censorship and open expression. 
+
+### Possible Solutions 
+
+Even so, to prevent this kind of thing I could focus on some things: 
+
+| # | Approach | Description |
+|---|----------|-------------|
+| 1 | **Monitor Account History** | Give less weight to newly created accounts with no history. Coordinated attacks almost always rely on throwaway accounts, so making those votes count less would go a long way without locking out legitimate users. Likes and comments from accounts who has been on good standing for longer should weigh higher. |
+| 2 | **Monitor Actual Watch Time** | Flag accounts that rate something they could not have seen yet. A rating from someone with verifiable engagement with the content being rated should weigh their opinion much more than someone who just clicked into the video to leave a dislike and a negative comment. |
+| 3 | **Handle Bursts** | Ratings that arrive in suspicious bursts should be flagged and quarantined pending review rather than immediately published. Especially from newly created accounts, I've seen people leaving comments 5 seconds after a 30 minute video was uploaded. It makes no sense for anyone to have made an informed opinion in that short a duration. |
+| 4 | **Separate Critic and Audience Scores** | Rotten Tomatoes does this well, separating critic scores and audience scores so that the decision is on the person looking at the landing page. It builds a dashboard of sorts where people can go further into critic reviews or user reviews and pick up on things they might or might not like. A verifiable critic system would not make sense on YouTube but it is a good model to reference. |
+
+> The goal with all this is not to eliminate manipulation entirely but to make it expensive enough that casual coordinated attacks are not worth the effort.
