@@ -1802,22 +1802,42 @@ of all available ratings in the training set</p>
 <pre><code>## Global mean rating (training): 3.5</code></pre>
 <div class="sourceCode" id="cb17"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb17-1"><a href="#cb17-1" tabindex="-1"></a>train_data <span class="ot">&lt;-</span> train_data <span class="sc">%&gt;%</span> <span class="fu">mutate</span>(<span class="at">pred_raw =</span> global_mean)</span>
 <span id="cb17-2"><a href="#cb17-2" tabindex="-1"></a>test_data  <span class="ot">&lt;-</span> test_data  <span class="sc">%&gt;%</span> <span class="fu">mutate</span>(<span class="at">pred_raw =</span> global_mean)</span></code></pre></div>
-<div id="rmse-raw-average" class="section level3">
-<h3>RMSE – Raw Average</h3>
-<p>Root mean squared error</p>
+<p>Now we can try two advanced error estimation Methods age</p>
+<div id="root-mean-squared-error" class="section level3">
+<h3>Root mean squared error</h3>
 <p>Error = Observed - Raw average</p>
 <p>-&gt; then Squared</p>
 <p>-&gt; then taken the Mean of</p>
 <p>-&gt; then taken the Square root of ’</p>
+</div>
+<div id="mean-absolute-error" class="section level3">
+<h3>Mean absolute error</h3>
+<p>Error = Observed - Predicted</p>
+<p>-&gt; Absolute value taken</p>
+<p>-&gt; Mean taken</p>
+<p>RMSE because errors are squared, punishes large individual mistakes
+more heavily than small ones.MAE treats every mistake equally regardless
+of size so it helps us show the usual prediction error a user would
+actually experience.Comparing the two should give us a better idea on
+the spread. Ff RMSE is much larger than MAE, it means a few predictions
+are very far off. If they are close together, errors are spread fairly
+evenly across predictions.</p>
 <div class="sourceCode" id="cb18"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb18-1"><a href="#cb18-1" tabindex="-1"></a>rmse <span class="ot">&lt;-</span> <span class="cf">function</span>(actual, predicted) <span class="fu">sqrt</span>(<span class="fu">mean</span>((actual <span class="sc">-</span> predicted)<span class="sc">^</span><span class="dv">2</span>))</span>
-<span id="cb18-2"><a href="#cb18-2" tabindex="-1"></a></span>
-<span id="cb18-3"><a href="#cb18-3" tabindex="-1"></a>rmse_raw_train <span class="ot">&lt;-</span> <span class="fu">rmse</span>(train_data<span class="sc">$</span>rating, train_data<span class="sc">$</span>pred_raw)</span>
-<span id="cb18-4"><a href="#cb18-4" tabindex="-1"></a>rmse_raw_test  <span class="ot">&lt;-</span> <span class="fu">rmse</span>(test_data<span class="sc">$</span>rating,  test_data<span class="sc">$</span>pred_raw)</span>
-<span id="cb18-5"><a href="#cb18-5" tabindex="-1"></a></span>
-<span id="cb18-6"><a href="#cb18-6" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;RMSE Raw Average – Train:&quot;</span>, <span class="fu">round</span>(rmse_raw_train, <span class="dv">4</span>), <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
+<span id="cb18-2"><a href="#cb18-2" tabindex="-1"></a>mae  <span class="ot">&lt;-</span> <span class="cf">function</span>(actual, predicted) <span class="fu">mean</span>(<span class="fu">abs</span>(actual <span class="sc">-</span> predicted))</span>
+<span id="cb18-3"><a href="#cb18-3" tabindex="-1"></a></span>
+<span id="cb18-4"><a href="#cb18-4" tabindex="-1"></a>rmse_raw_train <span class="ot">&lt;-</span> <span class="fu">rmse</span>(train_data<span class="sc">$</span>rating, train_data<span class="sc">$</span>pred_raw)</span>
+<span id="cb18-5"><a href="#cb18-5" tabindex="-1"></a>rmse_raw_test  <span class="ot">&lt;-</span> <span class="fu">rmse</span>(test_data<span class="sc">$</span>rating,  test_data<span class="sc">$</span>pred_raw)</span>
+<span id="cb18-6"><a href="#cb18-6" tabindex="-1"></a>mae_raw_train  <span class="ot">&lt;-</span> <span class="fu">mae</span>(train_data<span class="sc">$</span>rating,  train_data<span class="sc">$</span>pred_raw)</span>
+<span id="cb18-7"><a href="#cb18-7" tabindex="-1"></a>mae_raw_test   <span class="ot">&lt;-</span> <span class="fu">mae</span>(test_data<span class="sc">$</span>rating,   test_data<span class="sc">$</span>pred_raw)</span>
+<span id="cb18-8"><a href="#cb18-8" tabindex="-1"></a></span>
+<span id="cb18-9"><a href="#cb18-9" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;RMSE Raw Average – Train:&quot;</span>, <span class="fu">round</span>(rmse_raw_train, <span class="dv">4</span>), <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
 <pre><code>## RMSE Raw Average – Train: 1.0434</code></pre>
 <div class="sourceCode" id="cb20"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb20-1"><a href="#cb20-1" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;RMSE Raw Average – Test :&quot;</span>, <span class="fu">round</span>(rmse_raw_test,  <span class="dv">4</span>), <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
 <pre><code>## RMSE Raw Average – Test : 0.9574</code></pre>
+<div class="sourceCode" id="cb22"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb22-1"><a href="#cb22-1" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;MAE  Raw Average – Train:&quot;</span>, <span class="fu">round</span>(mae_raw_train,  <span class="dv">4</span>), <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
+<pre><code>## MAE  Raw Average – Train: 0.9032</code></pre>
+<div class="sourceCode" id="cb24"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb24-1"><a href="#cb24-1" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;MAE  Raw Average – Test :&quot;</span>, <span class="fu">round</span>(mae_raw_test,   <span class="dv">4</span>), <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
+<pre><code>## MAE  Raw Average – Test : 0.8333</code></pre>
 </div>
 </div>
 <div id="bias-calculation" class="section level2">
@@ -1832,15 +1852,15 @@ specific movie is generally good or bad.</p>
 (Positive if Movie is generally good, Negative if its bad )</p>
 <p>This helps us create the final baseline predictor</p>
 <p>Fina predictor = Raw average + User bias + Movie bias</p>
-<div class="sourceCode" id="cb22"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb22-1"><a href="#cb22-1" tabindex="-1"></a><span class="co"># User bias</span></span>
-<span id="cb22-2"><a href="#cb22-2" tabindex="-1"></a>user_bias <span class="ot">&lt;-</span> train_data <span class="sc">%&gt;%</span></span>
-<span id="cb22-3"><a href="#cb22-3" tabindex="-1"></a>  <span class="fu">group_by</span>(user) <span class="sc">%&gt;%</span></span>
-<span id="cb22-4"><a href="#cb22-4" tabindex="-1"></a>  <span class="fu">summarise</span>(<span class="at">user_mean =</span> <span class="fu">mean</span>(rating), <span class="at">.groups =</span> <span class="st">&quot;drop&quot;</span>) <span class="sc">%&gt;%</span></span>
-<span id="cb22-5"><a href="#cb22-5" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">b_u =</span> user_mean <span class="sc">-</span> global_mean)</span>
-<span id="cb22-6"><a href="#cb22-6" tabindex="-1"></a></span>
-<span id="cb22-7"><a href="#cb22-7" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;User Biases:</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
+<div class="sourceCode" id="cb26"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb26-1"><a href="#cb26-1" tabindex="-1"></a><span class="co"># User bias</span></span>
+<span id="cb26-2"><a href="#cb26-2" tabindex="-1"></a>user_bias <span class="ot">&lt;-</span> train_data <span class="sc">%&gt;%</span></span>
+<span id="cb26-3"><a href="#cb26-3" tabindex="-1"></a>  <span class="fu">group_by</span>(user) <span class="sc">%&gt;%</span></span>
+<span id="cb26-4"><a href="#cb26-4" tabindex="-1"></a>  <span class="fu">summarise</span>(<span class="at">user_mean =</span> <span class="fu">mean</span>(rating), <span class="at">.groups =</span> <span class="st">&quot;drop&quot;</span>) <span class="sc">%&gt;%</span></span>
+<span id="cb26-5"><a href="#cb26-5" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">b_u =</span> user_mean <span class="sc">-</span> global_mean)</span>
+<span id="cb26-6"><a href="#cb26-6" tabindex="-1"></a></span>
+<span id="cb26-7"><a href="#cb26-7" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;User Biases:</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
 <pre><code>## User Biases:</code></pre>
-<div class="sourceCode" id="cb24"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb24-1"><a href="#cb24-1" tabindex="-1"></a><span class="fu">print</span>(user_bias <span class="sc">%&gt;%</span> <span class="fu">select</span>(user, user_mean, b_u) <span class="sc">%&gt;%</span> <span class="fu">arrange</span>(user))</span></code></pre></div>
+<div class="sourceCode" id="cb28"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb28-1"><a href="#cb28-1" tabindex="-1"></a><span class="fu">print</span>(user_bias <span class="sc">%&gt;%</span> <span class="fu">select</span>(user, user_mean, b_u) <span class="sc">%&gt;%</span> <span class="fu">arrange</span>(user))</span></code></pre></div>
 <pre><code>## # A tibble: 10 × 3
 ##    user   user_mean    b_u
 ##    &lt;chr&gt;      &lt;dbl&gt;  &lt;dbl&gt;
@@ -1854,17 +1874,17 @@ specific movie is generally good or bad.</p>
 ##  8 User7       4.2   0.7  
 ##  9 User8       3.29 -0.214
 ## 10 User9       4.57  1.07</code></pre>
-<div class="sourceCode" id="cb26"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb26-1"><a href="#cb26-1" tabindex="-1"></a><span class="co"># Item bias</span></span>
-<span id="cb26-2"><a href="#cb26-2" tabindex="-1"></a>item_bias <span class="ot">&lt;-</span> train_data <span class="sc">%&gt;%</span></span>
-<span id="cb26-3"><a href="#cb26-3" tabindex="-1"></a>  <span class="fu">left_join</span>(user_bias <span class="sc">%&gt;%</span> <span class="fu">select</span>(user, b_u), <span class="at">by =</span> <span class="st">&quot;user&quot;</span>) <span class="sc">%&gt;%</span></span>
-<span id="cb26-4"><a href="#cb26-4" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">residual =</span> rating <span class="sc">-</span> global_mean <span class="sc">-</span> b_u) <span class="sc">%&gt;%</span></span>
-<span id="cb26-5"><a href="#cb26-5" tabindex="-1"></a>  <span class="fu">group_by</span>(item) <span class="sc">%&gt;%</span></span>
-<span id="cb26-6"><a href="#cb26-6" tabindex="-1"></a>  <span class="fu">summarise</span>(<span class="at">b_i =</span> <span class="fu">mean</span>(residual), <span class="at">.groups =</span> <span class="st">&quot;drop&quot;</span>)</span>
-<span id="cb26-7"><a href="#cb26-7" tabindex="-1"></a></span>
-<span id="cb26-8"><a href="#cb26-8" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;</span><span class="sc">\n</span><span class="st">Item Biases:</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
+<div class="sourceCode" id="cb30"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb30-1"><a href="#cb30-1" tabindex="-1"></a><span class="co"># Item bias</span></span>
+<span id="cb30-2"><a href="#cb30-2" tabindex="-1"></a>item_bias <span class="ot">&lt;-</span> train_data <span class="sc">%&gt;%</span></span>
+<span id="cb30-3"><a href="#cb30-3" tabindex="-1"></a>  <span class="fu">left_join</span>(user_bias <span class="sc">%&gt;%</span> <span class="fu">select</span>(user, b_u), <span class="at">by =</span> <span class="st">&quot;user&quot;</span>) <span class="sc">%&gt;%</span></span>
+<span id="cb30-4"><a href="#cb30-4" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">residual =</span> rating <span class="sc">-</span> global_mean <span class="sc">-</span> b_u) <span class="sc">%&gt;%</span></span>
+<span id="cb30-5"><a href="#cb30-5" tabindex="-1"></a>  <span class="fu">group_by</span>(item) <span class="sc">%&gt;%</span></span>
+<span id="cb30-6"><a href="#cb30-6" tabindex="-1"></a>  <span class="fu">summarise</span>(<span class="at">b_i =</span> <span class="fu">mean</span>(residual), <span class="at">.groups =</span> <span class="st">&quot;drop&quot;</span>)</span>
+<span id="cb30-7"><a href="#cb30-7" tabindex="-1"></a></span>
+<span id="cb30-8"><a href="#cb30-8" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;</span><span class="sc">\n</span><span class="st">Item Biases:</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
 <pre><code>## 
 ## Item Biases:</code></pre>
-<div class="sourceCode" id="cb28"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb28-1"><a href="#cb28-1" tabindex="-1"></a><span class="fu">print</span>(item_bias <span class="sc">%&gt;%</span> <span class="fu">arrange</span>(<span class="fu">desc</span>(b_i)))</span></code></pre></div>
+<div class="sourceCode" id="cb32"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb32-1"><a href="#cb32-1" tabindex="-1"></a><span class="fu">print</span>(item_bias <span class="sc">%&gt;%</span> <span class="fu">arrange</span>(<span class="fu">desc</span>(b_i)))</span></code></pre></div>
 <pre><code>## # A tibble: 10 × 2
 ##    item                b_i
 ##    &lt;chr&gt;             &lt;dbl&gt;
@@ -1882,24 +1902,24 @@ specific movie is generally good or bad.</p>
 </div>
 <div id="baseline-predictor" class="section level2">
 <h2>6. Baseline Predictor</h2>
-<div class="sourceCode" id="cb30"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb30-1"><a href="#cb30-1" tabindex="-1"></a><span class="co"># Join biases into training set</span></span>
-<span id="cb30-2"><a href="#cb30-2" tabindex="-1"></a>train_data <span class="ot">&lt;-</span> train_data <span class="sc">%&gt;%</span></span>
-<span id="cb30-3"><a href="#cb30-3" tabindex="-1"></a>  <span class="fu">left_join</span>(user_bias <span class="sc">%&gt;%</span> <span class="fu">select</span>(user, b_u), <span class="at">by =</span> <span class="st">&quot;user&quot;</span>) <span class="sc">%&gt;%</span></span>
-<span id="cb30-4"><a href="#cb30-4" tabindex="-1"></a>  <span class="fu">left_join</span>(item_bias,                        <span class="at">by =</span> <span class="st">&quot;item&quot;</span>) <span class="sc">%&gt;%</span></span>
-<span id="cb30-5"><a href="#cb30-5" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">pred_baseline =</span> <span class="fu">pmax</span>(<span class="dv">1</span>, <span class="fu">pmin</span>(<span class="dv">5</span>, global_mean <span class="sc">+</span> b_u <span class="sc">+</span> b_i)))</span>
-<span id="cb30-6"><a href="#cb30-6" tabindex="-1"></a></span>
-<span id="cb30-7"><a href="#cb30-7" tabindex="-1"></a><span class="co"># Join biases into test set</span></span>
-<span id="cb30-8"><a href="#cb30-8" tabindex="-1"></a>test_data <span class="ot">&lt;-</span> test_data <span class="sc">%&gt;%</span></span>
-<span id="cb30-9"><a href="#cb30-9" tabindex="-1"></a>  <span class="fu">left_join</span>(user_bias <span class="sc">%&gt;%</span> <span class="fu">select</span>(user, b_u), <span class="at">by =</span> <span class="st">&quot;user&quot;</span>) <span class="sc">%&gt;%</span></span>
-<span id="cb30-10"><a href="#cb30-10" tabindex="-1"></a>  <span class="fu">left_join</span>(item_bias,                        <span class="at">by =</span> <span class="st">&quot;item&quot;</span>) <span class="sc">%&gt;%</span></span>
-<span id="cb30-11"><a href="#cb30-11" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">pred_baseline =</span> <span class="fu">pmax</span>(<span class="dv">1</span>, <span class="fu">pmin</span>(<span class="dv">5</span>, global_mean <span class="sc">+</span> b_u <span class="sc">+</span> b_i)))</span>
-<span id="cb30-12"><a href="#cb30-12" tabindex="-1"></a></span>
-<span id="cb30-13"><a href="#cb30-13" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;Sample baseline predictions (test set):</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
+<div class="sourceCode" id="cb34"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb34-1"><a href="#cb34-1" tabindex="-1"></a><span class="co"># Join biases into training set</span></span>
+<span id="cb34-2"><a href="#cb34-2" tabindex="-1"></a>train_data <span class="ot">&lt;-</span> train_data <span class="sc">%&gt;%</span></span>
+<span id="cb34-3"><a href="#cb34-3" tabindex="-1"></a>  <span class="fu">left_join</span>(user_bias <span class="sc">%&gt;%</span> <span class="fu">select</span>(user, b_u), <span class="at">by =</span> <span class="st">&quot;user&quot;</span>) <span class="sc">%&gt;%</span></span>
+<span id="cb34-4"><a href="#cb34-4" tabindex="-1"></a>  <span class="fu">left_join</span>(item_bias,                        <span class="at">by =</span> <span class="st">&quot;item&quot;</span>) <span class="sc">%&gt;%</span></span>
+<span id="cb34-5"><a href="#cb34-5" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">pred_baseline =</span> <span class="fu">pmax</span>(<span class="dv">1</span>, <span class="fu">pmin</span>(<span class="dv">5</span>, global_mean <span class="sc">+</span> b_u <span class="sc">+</span> b_i)))</span>
+<span id="cb34-6"><a href="#cb34-6" tabindex="-1"></a></span>
+<span id="cb34-7"><a href="#cb34-7" tabindex="-1"></a><span class="co"># Join biases into test set</span></span>
+<span id="cb34-8"><a href="#cb34-8" tabindex="-1"></a>test_data <span class="ot">&lt;-</span> test_data <span class="sc">%&gt;%</span></span>
+<span id="cb34-9"><a href="#cb34-9" tabindex="-1"></a>  <span class="fu">left_join</span>(user_bias <span class="sc">%&gt;%</span> <span class="fu">select</span>(user, b_u), <span class="at">by =</span> <span class="st">&quot;user&quot;</span>) <span class="sc">%&gt;%</span></span>
+<span id="cb34-10"><a href="#cb34-10" tabindex="-1"></a>  <span class="fu">left_join</span>(item_bias,                        <span class="at">by =</span> <span class="st">&quot;item&quot;</span>) <span class="sc">%&gt;%</span></span>
+<span id="cb34-11"><a href="#cb34-11" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">pred_baseline =</span> <span class="fu">pmax</span>(<span class="dv">1</span>, <span class="fu">pmin</span>(<span class="dv">5</span>, global_mean <span class="sc">+</span> b_u <span class="sc">+</span> b_i)))</span>
+<span id="cb34-12"><a href="#cb34-12" tabindex="-1"></a></span>
+<span id="cb34-13"><a href="#cb34-13" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;Sample baseline predictions (test set):</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
 <pre><code>## Sample baseline predictions (test set):</code></pre>
-<div class="sourceCode" id="cb32"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb32-1"><a href="#cb32-1" tabindex="-1"></a>test_data <span class="sc">%&gt;%</span></span>
-<span id="cb32-2"><a href="#cb32-2" tabindex="-1"></a>  <span class="fu">select</span>(user, item, rating, pred_raw, pred_baseline) <span class="sc">%&gt;%</span></span>
-<span id="cb32-3"><a href="#cb32-3" tabindex="-1"></a>  <span class="fu">slice_head</span>(<span class="at">n =</span> <span class="dv">10</span>) <span class="sc">%&gt;%</span></span>
-<span id="cb32-4"><a href="#cb32-4" tabindex="-1"></a>  <span class="fu">print</span>()</span></code></pre></div>
+<div class="sourceCode" id="cb36"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb36-1"><a href="#cb36-1" tabindex="-1"></a>test_data <span class="sc">%&gt;%</span></span>
+<span id="cb36-2"><a href="#cb36-2" tabindex="-1"></a>  <span class="fu">select</span>(user, item, rating, pred_raw, pred_baseline) <span class="sc">%&gt;%</span></span>
+<span id="cb36-3"><a href="#cb36-3" tabindex="-1"></a>  <span class="fu">slice_head</span>(<span class="at">n =</span> <span class="dv">10</span>) <span class="sc">%&gt;%</span></span>
+<span id="cb36-4"><a href="#cb36-4" tabindex="-1"></a>  <span class="fu">print</span>()</span></code></pre></div>
 <pre><code>## # A tibble: 10 × 5
 ##    user   item            rating pred_raw pred_baseline
 ##    &lt;chr&gt;  &lt;chr&gt;            &lt;dbl&gt;    &lt;dbl&gt;         &lt;dbl&gt;
@@ -1917,22 +1937,22 @@ specific movie is generally good or bad.</p>
 </div>
 <div id="full-predicted-matrix" class="section level2">
 <h2>7. Full Predicted Matrix</h2>
-<div class="sourceCode" id="cb34"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb34-1"><a href="#cb34-1" tabindex="-1"></a><span class="co"># All user–item combinations</span></span>
-<span id="cb34-2"><a href="#cb34-2" tabindex="-1"></a>full_grid <span class="ot">&lt;-</span> <span class="fu">expand.grid</span>(<span class="at">user =</span> users, <span class="at">item =</span> movies, <span class="at">stringsAsFactors =</span> <span class="cn">FALSE</span>)</span>
-<span id="cb34-3"><a href="#cb34-3" tabindex="-1"></a></span>
-<span id="cb34-4"><a href="#cb34-4" tabindex="-1"></a>full_preds <span class="ot">&lt;-</span> full_grid <span class="sc">%&gt;%</span></span>
-<span id="cb34-5"><a href="#cb34-5" tabindex="-1"></a>  <span class="fu">left_join</span>(user_bias <span class="sc">%&gt;%</span> <span class="fu">select</span>(user, b_u), <span class="at">by =</span> <span class="st">&quot;user&quot;</span>) <span class="sc">%&gt;%</span></span>
-<span id="cb34-6"><a href="#cb34-6" tabindex="-1"></a>  <span class="fu">left_join</span>(item_bias,                        <span class="at">by =</span> <span class="st">&quot;item&quot;</span>) <span class="sc">%&gt;%</span></span>
-<span id="cb34-7"><a href="#cb34-7" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">pred_baseline =</span> <span class="fu">pmax</span>(<span class="dv">1</span>, <span class="fu">pmin</span>(<span class="dv">5</span>, global_mean <span class="sc">+</span> b_u <span class="sc">+</span> b_i))) <span class="sc">%&gt;%</span></span>
-<span id="cb34-8"><a href="#cb34-8" tabindex="-1"></a>  <span class="fu">select</span>(user, item, pred_baseline)</span>
-<span id="cb34-9"><a href="#cb34-9" tabindex="-1"></a></span>
-<span id="cb34-10"><a href="#cb34-10" tabindex="-1"></a>pred_matrix <span class="ot">&lt;-</span> full_preds <span class="sc">%&gt;%</span></span>
-<span id="cb34-11"><a href="#cb34-11" tabindex="-1"></a>  <span class="fu">pivot_wider</span>(<span class="at">names_from =</span> item, <span class="at">values_from =</span> pred_baseline) <span class="sc">%&gt;%</span></span>
-<span id="cb34-12"><a href="#cb34-12" tabindex="-1"></a>  <span class="fu">column_to_rownames</span>(<span class="st">&quot;user&quot;</span>)</span>
-<span id="cb34-13"><a href="#cb34-13" tabindex="-1"></a></span>
-<span id="cb34-14"><a href="#cb34-14" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;Full Baseline Prediction Matrix (all user–item pairs):</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
+<div class="sourceCode" id="cb38"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb38-1"><a href="#cb38-1" tabindex="-1"></a><span class="co"># All user–item combinations</span></span>
+<span id="cb38-2"><a href="#cb38-2" tabindex="-1"></a>full_grid <span class="ot">&lt;-</span> <span class="fu">expand.grid</span>(<span class="at">user =</span> users, <span class="at">item =</span> movies, <span class="at">stringsAsFactors =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb38-3"><a href="#cb38-3" tabindex="-1"></a></span>
+<span id="cb38-4"><a href="#cb38-4" tabindex="-1"></a>full_preds <span class="ot">&lt;-</span> full_grid <span class="sc">%&gt;%</span></span>
+<span id="cb38-5"><a href="#cb38-5" tabindex="-1"></a>  <span class="fu">left_join</span>(user_bias <span class="sc">%&gt;%</span> <span class="fu">select</span>(user, b_u), <span class="at">by =</span> <span class="st">&quot;user&quot;</span>) <span class="sc">%&gt;%</span></span>
+<span id="cb38-6"><a href="#cb38-6" tabindex="-1"></a>  <span class="fu">left_join</span>(item_bias,                        <span class="at">by =</span> <span class="st">&quot;item&quot;</span>) <span class="sc">%&gt;%</span></span>
+<span id="cb38-7"><a href="#cb38-7" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">pred_baseline =</span> <span class="fu">pmax</span>(<span class="dv">1</span>, <span class="fu">pmin</span>(<span class="dv">5</span>, global_mean <span class="sc">+</span> b_u <span class="sc">+</span> b_i))) <span class="sc">%&gt;%</span></span>
+<span id="cb38-8"><a href="#cb38-8" tabindex="-1"></a>  <span class="fu">select</span>(user, item, pred_baseline)</span>
+<span id="cb38-9"><a href="#cb38-9" tabindex="-1"></a></span>
+<span id="cb38-10"><a href="#cb38-10" tabindex="-1"></a>pred_matrix <span class="ot">&lt;-</span> full_preds <span class="sc">%&gt;%</span></span>
+<span id="cb38-11"><a href="#cb38-11" tabindex="-1"></a>  <span class="fu">pivot_wider</span>(<span class="at">names_from =</span> item, <span class="at">values_from =</span> pred_baseline) <span class="sc">%&gt;%</span></span>
+<span id="cb38-12"><a href="#cb38-12" tabindex="-1"></a>  <span class="fu">column_to_rownames</span>(<span class="st">&quot;user&quot;</span>)</span>
+<span id="cb38-13"><a href="#cb38-13" tabindex="-1"></a></span>
+<span id="cb38-14"><a href="#cb38-14" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;Full Baseline Prediction Matrix (all user–item pairs):</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
 <pre><code>## Full Baseline Prediction Matrix (all user–item pairs):</code></pre>
-<div class="sourceCode" id="cb36"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb36-1"><a href="#cb36-1" tabindex="-1"></a><span class="fu">print</span>(<span class="fu">round</span>(pred_matrix, <span class="dv">2</span>))</span></code></pre></div>
+<div class="sourceCode" id="cb40"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb40-1"><a href="#cb40-1" tabindex="-1"></a><span class="fu">print</span>(<span class="fu">round</span>(pred_matrix, <span class="dv">2</span>))</span></code></pre></div>
 <pre><code>##        Inception The Matrix Interstellar The Dark Knight Parasite Avengers
 ## User1       4.36       4.13         4.40            4.45     3.67     3.90
 ## User2       2.42       2.18         2.46            2.51     1.72     1.96
@@ -1957,35 +1977,43 @@ specific movie is generally good or bad.</p>
 ## User10  2.24 2.17           2.52       2.49</code></pre>
 <hr />
 </div>
-<div id="rmse-baseline-predictor" class="section level2">
-<h2>8. RMSE Baseline Predictor</h2>
-<div class="sourceCode" id="cb38"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb38-1"><a href="#cb38-1" tabindex="-1"></a>rmse_bl_train <span class="ot">&lt;-</span> <span class="fu">rmse</span>(train_data<span class="sc">$</span>rating, train_data<span class="sc">$</span>pred_baseline)</span>
-<span id="cb38-2"><a href="#cb38-2" tabindex="-1"></a>rmse_bl_test  <span class="ot">&lt;-</span> <span class="fu">rmse</span>(test_data<span class="sc">$</span>rating,  test_data<span class="sc">$</span>pred_baseline)</span>
-<span id="cb38-3"><a href="#cb38-3" tabindex="-1"></a></span>
-<span id="cb38-4"><a href="#cb38-4" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;RMSE Baseline – Train:&quot;</span>, <span class="fu">round</span>(rmse_bl_train, <span class="dv">4</span>), <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
+<div id="rmse-mae-baseline-predictor" class="section level2">
+<h2>8. RMSE &amp; MAE – Baseline Predictor</h2>
+<div class="sourceCode" id="cb42"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb42-1"><a href="#cb42-1" tabindex="-1"></a>rmse_bl_train <span class="ot">&lt;-</span> <span class="fu">rmse</span>(train_data<span class="sc">$</span>rating, train_data<span class="sc">$</span>pred_baseline)</span>
+<span id="cb42-2"><a href="#cb42-2" tabindex="-1"></a>rmse_bl_test  <span class="ot">&lt;-</span> <span class="fu">rmse</span>(test_data<span class="sc">$</span>rating,  test_data<span class="sc">$</span>pred_baseline)</span>
+<span id="cb42-3"><a href="#cb42-3" tabindex="-1"></a>mae_bl_train  <span class="ot">&lt;-</span> <span class="fu">mae</span>(train_data<span class="sc">$</span>rating,  train_data<span class="sc">$</span>pred_baseline)</span>
+<span id="cb42-4"><a href="#cb42-4" tabindex="-1"></a>mae_bl_test   <span class="ot">&lt;-</span> <span class="fu">mae</span>(test_data<span class="sc">$</span>rating,   test_data<span class="sc">$</span>pred_baseline)</span>
+<span id="cb42-5"><a href="#cb42-5" tabindex="-1"></a></span>
+<span id="cb42-6"><a href="#cb42-6" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;RMSE Baseline – Train:&quot;</span>, <span class="fu">round</span>(rmse_bl_train, <span class="dv">4</span>), <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
 <pre><code>## RMSE Baseline – Train: 0.5165</code></pre>
-<div class="sourceCode" id="cb40"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb40-1"><a href="#cb40-1" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;RMSE Baseline – Test :&quot;</span>, <span class="fu">round</span>(rmse_bl_test,  <span class="dv">4</span>), <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
+<div class="sourceCode" id="cb44"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb44-1"><a href="#cb44-1" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;RMSE Baseline – Test :&quot;</span>, <span class="fu">round</span>(rmse_bl_test,  <span class="dv">4</span>), <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
 <pre><code>## RMSE Baseline – Test : 0.601</code></pre>
+<div class="sourceCode" id="cb46"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb46-1"><a href="#cb46-1" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;MAE  Baseline – Train:&quot;</span>, <span class="fu">round</span>(mae_bl_train,  <span class="dv">4</span>), <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
+<pre><code>## MAE  Baseline – Train: 0.4492</code></pre>
+<div class="sourceCode" id="cb48"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb48-1"><a href="#cb48-1" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">&quot;MAE  Baseline – Test :&quot;</span>, <span class="fu">round</span>(mae_bl_test,   <span class="dv">4</span>), <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
+<pre><code>## MAE  Baseline – Test : 0.5068</code></pre>
 <hr />
 </div>
 <div id="results" class="section level2">
 <h2>9. Results</h2>
-<div class="sourceCode" id="cb42"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb42-1"><a href="#cb42-1" tabindex="-1"></a>results <span class="ot">&lt;-</span> <span class="fu">tibble</span>(</span>
-<span id="cb42-2"><a href="#cb42-2" tabindex="-1"></a>  <span class="at">Method             =</span> <span class="fu">c</span>(<span class="st">&quot;Raw Average&quot;</span>, <span class="st">&quot;Raw Average&quot;</span>, <span class="st">&quot;Baseline Predictor&quot;</span>, <span class="st">&quot;Baseline Predictor&quot;</span>),</span>
-<span id="cb42-3"><a href="#cb42-3" tabindex="-1"></a>  <span class="at">Dataset            =</span> <span class="fu">c</span>(<span class="st">&quot;Train&quot;</span>, <span class="st">&quot;Test&quot;</span>, <span class="st">&quot;Train&quot;</span>, <span class="st">&quot;Test&quot;</span>),</span>
-<span id="cb42-4"><a href="#cb42-4" tabindex="-1"></a>  <span class="at">RMSE               =</span> <span class="fu">c</span>(rmse_raw_train, rmse_raw_test, rmse_bl_train, rmse_bl_test)</span>
-<span id="cb42-5"><a href="#cb42-5" tabindex="-1"></a>)</span>
-<span id="cb42-6"><a href="#cb42-6" tabindex="-1"></a></span>
-<span id="cb42-7"><a href="#cb42-7" tabindex="-1"></a>results <span class="sc">%&gt;%</span></span>
-<span id="cb42-8"><a href="#cb42-8" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">RMSE =</span> <span class="fu">round</span>(RMSE, <span class="dv">4</span>)) <span class="sc">%&gt;%</span></span>
-<span id="cb42-9"><a href="#cb42-9" tabindex="-1"></a>  knitr<span class="sc">::</span><span class="fu">kable</span>(<span class="at">caption =</span> <span class="st">&quot;RMSE Comparison: Raw Average vs Baseline Predictor&quot;</span>)</span></code></pre></div>
+<div class="sourceCode" id="cb50"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb50-1"><a href="#cb50-1" tabindex="-1"></a>results <span class="ot">&lt;-</span> <span class="fu">tibble</span>(</span>
+<span id="cb50-2"><a href="#cb50-2" tabindex="-1"></a>  <span class="at">Method  =</span> <span class="fu">c</span>(<span class="st">&quot;Raw Average&quot;</span>, <span class="st">&quot;Raw Average&quot;</span>, <span class="st">&quot;Baseline Predictor&quot;</span>, <span class="st">&quot;Baseline Predictor&quot;</span>),</span>
+<span id="cb50-3"><a href="#cb50-3" tabindex="-1"></a>  <span class="at">Dataset =</span> <span class="fu">c</span>(<span class="st">&quot;Train&quot;</span>, <span class="st">&quot;Test&quot;</span>, <span class="st">&quot;Train&quot;</span>, <span class="st">&quot;Test&quot;</span>),</span>
+<span id="cb50-4"><a href="#cb50-4" tabindex="-1"></a>  <span class="at">RMSE    =</span> <span class="fu">c</span>(rmse_raw_train, rmse_raw_test, rmse_bl_train, rmse_bl_test),</span>
+<span id="cb50-5"><a href="#cb50-5" tabindex="-1"></a>  <span class="at">MAE     =</span> <span class="fu">c</span>(mae_raw_train,  mae_raw_test,  mae_bl_train,  mae_bl_test)</span>
+<span id="cb50-6"><a href="#cb50-6" tabindex="-1"></a>)</span>
+<span id="cb50-7"><a href="#cb50-7" tabindex="-1"></a></span>
+<span id="cb50-8"><a href="#cb50-8" tabindex="-1"></a>results <span class="sc">%&gt;%</span></span>
+<span id="cb50-9"><a href="#cb50-9" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="at">RMSE =</span> <span class="fu">round</span>(RMSE, <span class="dv">4</span>), <span class="at">MAE =</span> <span class="fu">round</span>(MAE, <span class="dv">4</span>)) <span class="sc">%&gt;%</span></span>
+<span id="cb50-10"><a href="#cb50-10" tabindex="-1"></a>  knitr<span class="sc">::</span><span class="fu">kable</span>(<span class="at">caption =</span> <span class="st">&quot;RMSE &amp; MAE: Raw Average vs Baseline Predictor&quot;</span>)</span></code></pre></div>
 <table>
-<caption>RMSE Comparison: Raw Average vs Baseline Predictor</caption>
+<caption>RMSE &amp; MAE: Raw Average vs Baseline Predictor</caption>
 <thead>
 <tr class="header">
 <th align="left">Method</th>
 <th align="left">Dataset</th>
 <th align="right">RMSE</th>
+<th align="right">MAE</th>
 </tr>
 </thead>
 <tbody>
@@ -1993,21 +2021,25 @@ specific movie is generally good or bad.</p>
 <td align="left">Raw Average</td>
 <td align="left">Train</td>
 <td align="right">1.0434</td>
+<td align="right">0.9032</td>
 </tr>
 <tr class="even">
 <td align="left">Raw Average</td>
 <td align="left">Test</td>
 <td align="right">0.9574</td>
+<td align="right">0.8333</td>
 </tr>
 <tr class="odd">
 <td align="left">Baseline Predictor</td>
 <td align="left">Train</td>
 <td align="right">0.5165</td>
+<td align="right">0.4492</td>
 </tr>
 <tr class="even">
 <td align="left">Baseline Predictor</td>
 <td align="left">Test</td>
 <td align="right">0.6010</td>
+<td align="right">0.5068</td>
 </tr>
 </tbody>
 </table>
@@ -2015,14 +2047,35 @@ specific movie is generally good or bad.</p>
 </div>
 <div id="interpretation-conclusions" class="section level2">
 <h2>10. Interpretation &amp; Conclusions</h2>
-<p>Bias adjustment meaningfully lowers RMSE when compared to using Raw
-averages.</p>
+<p>Bias adjustment meaningfully lowers both RMSE and MAE when compared
+to using Raw averages.</p>
 <p>When we start to account for the fact that some Users are more
 generous (User1, User4, User9) and some Movies are better loved (The
 Dark Knight, Inception), the baseline predictor reduces prediction error
 on the test set.</p>
-<p>The gap between training and test set in RMSE is also relatively
-small, so our method estimates generalise well.</p>
+<p>The gap between training and test set in both metrics is also
+relatively small, so our method estimates generalise well.</p>
+<p><strong>RMSE vs MAE</strong></p>
+<p>RMSE is always going to be greater than or equal to MAE because
+squaring amplifies larger errors. The ratio between them tells us about
+the shape of our errors. Here RMSE is consistently about 0.10–0.15
+higher than MAE across every case. That small, stable gap tells us the
+errors in this model are fairly uniform in size there are no wild
+outlier predictions dragging RMSE up disproportionaly. Also This
+suggests our extreme users the very generous and very harsh raters are
+still producing some bigger errors that bias correction did not fully
+eliminate.</p>
+<p>The ratio between RMSE and AME stays stable even after adding bias
+correction, meaning the baseline did not introduce any new extreme wrong
+predictions, it just shifted all errors down uniformly.</p>
+<p>Baseline predictor brings MAE down from 0.90 to 0.51 on the test set,
+meaning on average we are now off by about half a point instead of
+nearly a full point. That is a meaningful improvement</p>
+<p>MAE is easier to communicate , while RMSE is more useful as maybe a
+safeguard against like recommending a 1 star movie to someone who would
+probably rate it a 5. Since our RMSE and MAE stay proportional
+throughout, we can be reasonably confident the model is not producing
+those kinds of outlier recommendations.</p>
 </div>
 
 
