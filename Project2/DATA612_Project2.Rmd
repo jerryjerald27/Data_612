@@ -1,0 +1,311 @@
+---
+title: "DATA612Project2"
+output: html_document
+date: "2026-06-11"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+
+library(readxl)   
+library(dplyr)     
+library(ggplot2)   
+library(tidyr)    
+
+```
+
+## Overview
+
+In This project I try two collaborative filtering recommender systems on the Jester Joke Dataset. This is a dataset that contains a collection of joke ratings −10 to +10 from users. While the dataset has 25000 users rating 100 jokes we are going to use a smaller sample of 100 , as using bigger samples was crashing my R. If you wish to rerun the analysis with a bigger group you can change the argument for the variable 'sampled' 
+
+The two approaches are 
+
+**User Collaborative Filtering**, which finds users who rated jokes similarly to the active user and uses their ratings to make predictions and 
+
+**Item Collaborative Filtering**, which finds jokes that tend to get rated similarly to each other and uses that to predict missing ratings.
+
+Both algorithms are evaluated using RMSE, MAE, and NMAE on atest set. We also try both Pearson and Cosine similarity to see which performs better.
+
+
+## Loading and cleaning
+
+```{r load-data}
+#   Column 1 is how many jokes that user rated , we can drop this
+#   Columns 2 to 101 is the the users rating for jokes 1 to 100
+# Ratings go from -10 to +10. 99 means "not rated" which we replace with NA.
+
+raw <- read_excel("jester-data-1.xls", col_names = FALSE)
+ratings <- raw[, -1]
+colnames(ratings) <- paste0("joke", 1:100)
+ratings[ratings == 99] <- NA
+ratings_mat <- as.matrix(ratings)
+cat("Dataset size:", nrow(ratings_mat), "users x", ncol(ratings_mat), "jokes\n")
+cat("Percentage of ratings that are observed:",
+    round(100 * mean(!is.na(ratings_mat)), 1), "%\n")
+```
+
+
+## Sampling and splitting for train and test
+
+```{r sample-split}
+set.seed(123)
+
+# Only using reveiweres who have rated atleast 20 percent of the jokes 
+enough_ratings <- which(rowSums(!is.na(ratings_mat)) >= 20)
+# Change this to change sample size 
+sampled        <- sample(enough_ratings, 100)  
+mat            <- ratings_mat[sampled, ]
+
+# Train Test split 20%
+observed    <- which(!is.na(mat), arr.ind = TRUE)
+test_idx    <- sample(nrow(observed), size = round(0.2 * nrow(observed)))
+train_mat   <- mat
+test_mat    <- matrix(NA, nrow = nrow(mat), ncol = ncol(mat))
+for (i in test_idx) {
+  r <- observed[i, 1]
+  c <- observed[i, 2]
+  test_mat[r, c]  <- mat[r, c]
+  train_mat[r, c] <- NA
+}
+cat("Training ratings:", sum(!is.na(train_mat)), "\n")
+cat("Test ratings:    ", sum(!is.na(test_mat)),  "\n")
+```
+
+
+## Error Metrics
+
+```{r metrics}
+# We use RMSE, MAE from the last project and also Normalised MAE 
+rmse <- function(actual, pred) sqrt(mean((actual - pred)^2, na.rm = TRUE))
+mae  <- function(actual, pred) mean(abs(actual - pred), na.rm = TRUE)
+nmae <- function(actual, pred) mae(actual, pred) / 20  # range is 20 (-10 to +10)
+```
+
+## Similarity Functions
+
+```{r similarity}
+# Pearson measures how correlated two rating vectors are.
+pearson_sim <- function(a, b) {
+  idx <- !is.na(a) & !is.na(b)
+  if (sum(idx) < 2) return(0)   
+  cor(a[idx], b[idx])
+}
+
+# Cosine similarity treats each rating vector as a point in space and measure angle between them. 
+cosine_sim <- function(a, b) {
+  idx <- !is.na(a) & !is.na(b)
+  if (sum(idx) == 0) return(0)
+  a2 <- a[idx]; b2 <- b[idx]
+  denom <- sqrt(sum(a2^2)) * sqrt(sum(b2^2))
+  if (denom == 0) return(0)
+  sum(a2 * b2) / denom
+}
+```
+
+
+## User Collaborative Filtering
+
+```{r uucf}
+
+# Steps:
+#   1. Compute similarity between the target and all other users
+#   2. Pick the top k most similar users who have rated the target joke
+#   3. Predict the weighted average of neighbor ratings
+
+user_means <- rowMeans(train_mat, na.rm = TRUE)
+train_centered <- sweep(train_mat, 1, user_means, FUN = "-")
+train_centered[is.na(train_mat)] <- NA
+uucf_predict <- function(sim_fn, k = 15) {
+# Find all test cells
+  test_cells <- which(!is.na(test_mat), arr.ind = TRUE)
+  
+  actual    <- numeric(nrow(test_cells))
+  predicted <- numeric(nrow(test_cells))
+  
+  for (i in seq_len(nrow(test_cells))) {
+    u <- test_cells[i, 1]   # target user
+    j <- test_cells[i, 2]   # target joke
+    
+    actual[i] <- test_mat[u, j]
+      # Compute similarity between target user and all other users 
+    sims <- sapply(seq_len(nrow(train_mat)), function(v) {
+      if (v == u) return(NA)
+      sim_fn(train_centered[u, ], train_centered[v, ])
+    })
+    # Only keep neighbors who actually rated joke j
+    has_rated <- !is.na(train_mat[, j])
+    sims[!has_rated] <- NA
+    sims[u] <- NA
+    # Pick top k neighbors by similarity
+    top_k <- order(sims, decreasing = TRUE, na.last = NA)[1:min(k, sum(!is.na(sims)))]
+    
+    if (length(top_k) == 0) {
+      predicted[i] <- user_means[u]  
+      next
+    }
+    
+    w <- sims[top_k]
+    if (sum(abs(w)) == 0) {
+      predicted[i] <- user_means[u]
+      next
+    }
+# predicted rating is mean of the target user +  weighted average of neighbour ratings
+    neighbor_ratings <- train_centered[top_k, j]
+    pred <- user_means[u] + sum(w * neighbor_ratings, na.rm = TRUE) / sum(abs(w))
+    predicted[i] <- max(-10, min(10, pred))   # clip to valid range
+  }
+  
+  data.frame(actual = actual, predicted = predicted)
+}
+
+cat("UUCF Pearson similarity\n")
+uucf_pearson <- uucf_predict(pearson_sim, k = 15)
+
+cat("UUCF with Cosine similarity\n")
+uucf_cosine  <- uucf_predict(cosine_sim,  k = 15)
+```
+
+---
+
+## Item-Item Collaborative Filtering
+
+```{r iicf}
+
+iicf_predict <- function(sim_fn, k = 15) {
+  test_cells <- which(!is.na(test_mat), arr.ind = TRUE)
+  
+  actual    <- numeric(nrow(test_cells))
+  predicted <- numeric(nrow(test_cells))
+  
+  for (i in seq_len(nrow(test_cells))) {
+    u <- test_cells[i, 1]
+    j <- test_cells[i, 2]
+    
+    actual[i] <- test_mat[u, j]
+    
+    # Find jokes the user rated
+    rated_by_user <- which(!is.na(train_mat[u, ]))
+    rated_by_user <- setdiff(rated_by_user, j)
+    
+    if (length(rated_by_user) == 0) {
+      predicted[i] <- user_means[u]
+      next
+    }
+    
+    # Similarity between target joke j and all jokes user has rated
+    sims <- sapply(rated_by_user, function(jj) sim_fn(train_mat[, j], train_mat[, jj]))
+    
+    # Top k most similar jokes
+    top_k <- order(sims, decreasing = TRUE, na.last = NA)[1:min(k, length(sims))]
+    w     <- sims[top_k]
+    
+    if (sum(abs(w)) == 0) {
+      predicted[i] <- user_means[u]
+      next
+    }
+    
+    neighbor_jokes   <- rated_by_user[top_k]
+    neighbor_ratings <- train_mat[u, neighbor_jokes]
+    pred <- sum(w * neighbor_ratings, na.rm = TRUE) / sum(abs(w))
+    predicted[i] <- max(-10, min(10, pred))
+  }
+  
+  data.frame(actual = actual, predicted = predicted)
+}
+
+cat("IICF with Pearson\n")
+iicf_pearson <- iicf_predict(pearson_sim, k = 15)
+
+cat("Running IICF with Cosine\n")
+iicf_cosine  <- iicf_predict(cosine_sim,  k = 15)
+```
+
+---
+
+## Results
+
+```{r results-table}
+results <- data.frame(
+  Algorithm  = c("UUCF – Pearson", "UUCF – Cosine",
+                 "IICF – Pearson", "IICF – Cosine"),
+  RMSE = c(rmse(uucf_pearson$actual, uucf_pearson$predicted),
+           rmse(uucf_cosine$actual,  uucf_cosine$predicted),
+           rmse(iicf_pearson$actual, iicf_pearson$predicted),
+           rmse(iicf_cosine$actual,  iicf_cosine$predicted)),
+  MAE  = c(mae(uucf_pearson$actual, uucf_pearson$predicted),
+           mae(uucf_cosine$actual,  uucf_cosine$predicted),
+           mae(iicf_pearson$actual, iicf_pearson$predicted),
+           mae(iicf_cosine$actual,  iicf_cosine$predicted)),
+  NMAE = c(nmae(uucf_pearson$actual, uucf_pearson$predicted),
+           nmae(uucf_cosine$actual,  uucf_cosine$predicted),
+           nmae(iicf_pearson$actual, iicf_pearson$predicted),
+           nmae(iicf_cosine$actual,  iicf_cosine$predicted))
+) %>%
+  mutate(across(where(is.numeric), ~round(.x, 4)))
+
+knitr::kable(results, caption = "Error Metrics by Algorithm")
+```
+
+---
+
+## Visualization
+
+```{r plot}
+results_long <- results %>%
+  pivot_longer(cols = c(RMSE, MAE, NMAE), names_to = "Metric", values_to = "Value")
+
+ggplot(results_long, aes(x = Algorithm, y = Value, fill = Algorithm)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~Metric, scales = "free_y") +
+  geom_hline(data = data.frame(Metric = "NMAE", y = 0.33),
+             aes(yintercept = y), linetype = "dashed", color = "red") +
+  labs(
+    title    = "Recommender Performance",
+    subtitle = "",
+    x        = NULL,
+    y        = "Error Value"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 25, hjust = 1))
+```
+
+
+## Summary and Findings
+
+
+
+
+**How do we know it's working?**
+
+All four algorithms produce NMAE values between 0.165 and 0.176 which is well below the 0.33 baseline you'd get from random guessing on this dataset as shown in the original Jester paper. That's roughly half the error of random guessing, which tells us the models are picking up real signal from the rating patterns.
+
+
+**What the metrics mean:**
+
+RMSE and MAE are both in the original rating scale. Our MAE values are around 3.3 - 3.5 meaning predictions are off by about 3.3 to 3.5 rating points on average. NMAE converts that to a percentage of the full scale and all four methods land around 18%, which is competitive with the 20% benchmark reported in the Jester paper for more sophisticated algorithms.
+
+
+**What performed best?**
+
+UUCF with Cosine similarity came out on top with the lowest RMSE, MAE and NMAE though the differences between methods are small. From what i know i expected pearson to work better because it accounts for individual rating bias but here cosine worked better so im guessing the bias correction matters less when so many users have rated the same jokes
+
+
+**Potential issues:**
+
+As always with these we deal with cold start issues.
+Also the scale has been extremely limited by my computing power. Computing pairwise similarities for 25000 users seems like it would have fried everything with a pcb in my building
+Also the train test split is random. usually with a rating system the training set is the older reviews and the test set is newer predictions. There is a component of time which we are not accounting for. 
+
+**Possible improvements:**
+
+Bigger sample size whenever possible
+Also possibly different values of k to see where accuracy is higher. I just used K = 15 as per ai recommendation as a general baseline. 
+
+
+## References
+
+Goldberg, K., Roeder, T., Gupta, D., & Perkins, C. (2001). Eigentaste: A Constant Time Collaborative Filtering Algorithm. *Information Retrieval*, 4(2), 133–151. https://goldberg.berkeley.edu/jester-data/
