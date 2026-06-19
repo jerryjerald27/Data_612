@@ -1,0 +1,26 @@
+---
+title: "DATA612_RD2"
+author: "Jerald Melukkaran"
+date: "2026-06-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+
+The talk is by a machine learning engineer at Spotify who walks through how Spotify builds its music recommendation system and how they moved that system from Hadoop to Spark. The first half covers the math behind their approach , which is a lot of math. I had slow it down a lot and brush up my matrix operational knowledge from 10 years back to try and understand the process. The main math was implicit matrix factorization solved with alternating least squares. The rest of the video is about the engineering pain of running that algorithm at scale on real data.
+
+
+One of the first things that I noticed in the talk was the solution to the explicit vs implicit feedback situation.  In the second project I worked with the Jester dataset where users actually gave numeric ratings which map neatly into a ratings matrix and you're trying to fill in the blanks. But Spotify doesn't have that. Nobody sits down and rates songs. Instead, they have to infer a rating  matrix from listening behavior. So they decided to use a binary system with a weighted loss function.  if you streamed a track that's a 1, if you didn't that's a 0. Then the used RMSE weighted by the confidence which was based on how many times a song was played. so a song you've played 500 times counts way more in the loss function than something you played once.  Pretty good solution to get over the implied ratings situation. 
+
+
+The other thing that stood out was how they kept on finding the choke points in the process and kept improving until the time required was cut down to a tenth of the original. Shows us how much optimisation we might be leaving on the table for problems like these. He described three different attempts at implementing this, the basic method, the full gridify block partitioning approach, and the half gridify method that Spark's MLlib actually uses, and each one was trying to solve the same basic problem of avoiding shuffling huge amounts of data across the network on every iteration and the way they moved between the solutions was very interesting. Every decision being made was made considering the tradeoffs between the pros and cons. Wach partition could require a copy of each item vector for eg if you have a user thats listened to almost all of the songs on the platform. This comes at the cost of a huge local memory requirement but then the method saves so much time not shuffling rating data around. Shows us that a better approach might not be better in every way but as long as we can focus on the metrics that we are actually trying to improve on, therese always a good trade off to find. 
+
+
+The comparisons between hadoop and spark was also interesting. With Hadoop, every iteration requires a full read write cycle to disk which is slow for this case. Sparks whole advantage is keeping the ratings matrix cached in memory so you only load it once saving a lot on time. Even then the fact that they were still running into failed executors and hadn't gotten it working completely on their their full dataset is an indication of how moving to a new distributed system is not just a technical lift. It's months of tuning and debugging.Overall the talk was a good reminder that the gap between an algorithm working on a sample set and it working in full production mode for all your users is huge and most of that gap is infrastructure, not just math.
