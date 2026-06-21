@@ -36,7 +36,7 @@ Both algorithms are evaluated using RMSE, MAE, and NMAE on atest set. We also tr
 ```{r load-data}
 #   Column 1 is how many jokes that user rated , we can drop this
 #   Columns 2 to 101 is the the users rating for jokes 1 to 100
-# Ratings go from -10 to +10. 99 means "not rated" which we replace with NA.
+# Ratings go from -10 to +10. 99 means not rated which we replace with NA.
 
 raw <- read_excel("jester-data-1.xls", col_names = FALSE)
 ratings <- raw[, -1]
