@@ -1,0 +1,298 @@
+---
+title: "DATA612Project4"
+date: "2026-06-25"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Overview
+
+This project we try and build two recommender systems on the BoardGameGeek Top 2000 dataset, which has user ratings from 1 to 10 for close to 2000 board games from 200 users. I was trying to get a dataset for video games but the once i found were mosylu implicit feedback that i had to decipher from game time instead of actual ratings. So i decided to go with this boardgame dataset that would let us run better accuracy metrics like our last projects. We compare user user collaborative filtering and SVD on standard accuracy metrics and then look at novelty as our beyond accuracy metric, basically how often the recommender is surfacing games that might not be as popular but still within the taste vs just recommending the most popular ones everyone already knows
+
+
+
+## Libraries
+
+```{r libraries}
+library(arrow)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+```
+
+
+
+## Load and Filter Data
+
+```{r load-data}
+# only pulling the three columns to keep memory in check, i was having crashes with the whole datset 
+ratings_raw <- read_feather("bgg_ratings_top_2000.feather",
+                             col_select = c("nickname", "boardgame_id", "rating"))
+
+ratings_raw <- ratings_raw %>% filter(!is.na(rating))
+
+# users with at least 20 ratings games rated by at least 50 users to remove noise
+user_counts <- ratings_raw %>% count(nickname)
+game_counts <- ratings_raw %>% count(boardgame_id)
+
+ratings_filtered <- ratings_raw %>%
+  filter(nickname %in% (user_counts %>% filter(n >= 20) %>% pull(nickname)),
+         boardgame_id %in% (game_counts %>% filter(n >= 50) %>% pull(boardgame_id)))
+
+# sample 200 users
+set.seed(612)
+sampled_users    <- sample(unique(ratings_filtered$nickname), 200)
+ratings_sample   <- ratings_filtered %>% filter(nickname %in% sampled_users)
+
+cat("We are working with", nrow(ratings_sample), "ratings,",
+    n_distinct(ratings_sample$nickname), "users,",
+    n_distinct(ratings_sample$boardgame_id), "games\n")
+```
+
+
+## Build Ratings Matrix
+
+```{r build-matrix}
+ratings_wide <- ratings_sample %>%
+  pivot_wider(names_from  = boardgame_id,
+              values_from = rating,
+              values_fn   = mean)   # collapse any duplicate user/game pairs
+
+user_ids <- ratings_wide$nickname
+mat      <- matrix(as.numeric(unlist(ratings_wide[, -1])),
+                   nrow = nrow(ratings_wide),
+                   ncol = ncol(ratings_wide) - 1)
+rownames(mat) <- user_ids
+colnames(mat) <- colnames(ratings_wide)[-1]
+
+cat("Matrix", nrow(mat), "users ", ncol(mat), "games\n")
+cat("Density", round(100 * mean(!is.na(mat)), 1), "%\n")
+```
+
+---
+
+## Train and Test Split
+
+```{r split}
+observed <- which(!is.na(mat), arr.ind = TRUE)
+test_idx <- sample(nrow(observed), size = round(0.2 * nrow(observed)))
+
+train_mat <- mat
+test_mat  <- mat
+test_mat[ observed[-test_idx, ]] <- NA   
+train_mat[observed[ test_idx, ]] <- NA   
+
+```
+
+---
+
+## Error Metrics
+
+```{r metrics}
+rmse <- function(a, p) sqrt(mean((a - p)^2, na.rm = TRUE))
+mae  <- function(a, p) mean(abs(a - p), na.rm = TRUE)
+nmae <- function(a, p) mae(a, p) / 9
+```
+
+---
+
+## user user collaborative filtering
+
+```{r uucf}
+# precompute the full user similarity matrix once upfront to make it run faster
+user_means     <- rowMeans(train_mat, na.rm = TRUE)
+train_centered <- sweep(train_mat, 1, user_means, "-")
+train_centered[is.na(train_mat)] <- NA
+
+# pearson similarity between every pair of users
+n <- nrow(train_mat)
+sim_mat <- matrix(0, n, n)
+for (i in 1:(n-1)) {
+  for (j in (i+1):n) {
+    idx <- !is.na(train_centered[i,]) & !is.na(train_centered[j,])
+    if (sum(idx) < 2) next
+    s <- cor(train_centered[i, idx], train_centered[j, idx])
+    sim_mat[i,j] <- sim_mat[j,i] <- ifelse(is.na(s), 0, s)
+  }
+}
+
+# predicting test cells using top k neighbors
+k <- 15
+# based on project 2 findings where k 15 outperformed k5 and k30 on the jester dataset. too few neighbors and predictions are noisy, too many and  you start pulling in users who arent actually similar. 15 is a reasonable  middle ground and we are keeping it consistent across projects for comparability. Im trying not to randomly pick parameters and have a little plan for them 
+
+
+test_cells <- which(!is.na(test_mat), arr.ind = TRUE)
+uucf_actual <- uucf_pred <- numeric(nrow(test_cells))
+
+for (i in seq_len(nrow(test_cells))) {
+  u <- test_cells[i, 1]
+  j <- test_cells[i, 2]
+  uucf_actual[i] <- test_mat[u, j]
+
+  sims      <- sim_mat[u, ]
+  has_rated <- !is.na(train_mat[, j])
+  sims[!has_rated] <- NA
+  sims[u]          <- NA
+
+  top_k <- order(sims, decreasing = TRUE, na.last = NA)[1:min(k, sum(!is.na(sims)))]
+  if (length(top_k) == 0) { uucf_pred[i] <- user_means[u]; next }
+
+  w <- sims[top_k]
+  if (sum(abs(w)) == 0) { uucf_pred[i] <- user_means[u]; next }
+
+  uucf_pred[i] <- max(1, min(10,
+    user_means[u] + sum(w * train_centered[top_k, j], na.rm = TRUE) / sum(abs(w))
+  ))
+}
+
+cat("UUCF => RMSE:", round(rmse(uucf_actual, uucf_pred), 4),
+    "MAE:", round(mae(uucf_actual, uucf_pred), 4),
+    "NMAE:", round(nmae(uucf_actual, uucf_pred), 4), "\n")
+```
+
+## SVD
+
+```{r svd}
+# impute missing values as average of user mean and game mean then decompose and reconstruct with top k 
+game_means    <- colMeans(train_mat, na.rm = TRUE)
+train_imputed <- train_mat
+
+for (i in 1:nrow(train_imputed))
+  for (j in 1:ncol(train_imputed))
+    if (is.na(train_imputed[i,j]))
+      train_imputed[i,j] <- (user_means[i] + game_means[j]) / 2
+
+svd_res <- svd(train_imputed)
+
+k     <- 10
+# project 3 showed that lower k values outperformed higher ones when using imputation based SVD. this is because higher k starts fitting the imputed values rather than real signal. k=10 gives enough factors to capture # meaningful structure without overfitting to the artificial values we filled in. 
+
+recon <- svd_res$u[,1:k] %*% diag(svd_res$d[1:k]) %*% t(svd_res$v[,1:k])
+recon <- pmax(1, pmin(10, recon))
+dim(recon) <- dim(train_imputed)   
+
+svd_actual <- test_mat[test_cells]
+svd_pred   <- recon[test_cells]
+
+cat("SVD => RMSE:", round(rmse(svd_actual, svd_pred), 4),
+    "MAE:", round(mae(svd_actual, svd_pred), 4),
+    "NMAE:", round(nmae(svd_actual, svd_pred), 4), "\n")
+```
+
+## Accuracy Comparison
+
+```{r accuracy-table}
+results <- data.frame(
+  Algorithm = c("UUCF Pearson (k=15)", "SVD (k=10)"),
+  RMSE = c(round(rmse(uucf_actual, uucf_pred), 4),
+            round(rmse(svd_actual,  svd_pred),  4)),
+  MAE  = c(round(mae(uucf_actual, uucf_pred), 4),
+            round(mae(svd_actual,  svd_pred),  4)),
+  NMAE = c(round(nmae(uucf_actual, uucf_pred), 4),
+            round(nmae(svd_actual,  svd_pred),  4))
+)
+
+knitr::kable(results, caption = "UUCF vs SVD Error Metrics")
+```
+
+---
+
+## Novelty
+
+```{r novelty}
+# we use the number of ratings a game has in the sample as popularity
+# so basically fewer ratings means higher novelty
+# novelty score = mean(-log2(popularity)) across the top 10 
+
+game_pop <- ratings_sample %>%
+  count(boardgame_id) %>%
+  mutate(popularity = n / max(n))
+
+get_novelty <- function(user_idx) {
+  scores <- recon[user_idx, ]
+  scores[!is.na(train_mat[user_idx, ])] <- NA   
+  top10  <- order(scores, decreasing = TRUE, na.last = NA)[1:10]
+  ids    <- as.integer(colnames(train_mat)[top10])
+  pop    <- game_pop$popularity[match(ids, game_pop$boardgame_id)]
+  mean(-log2(pop + 1e-10), na.rm = TRUE)
+}
+
+novelty_scores <- sapply(1:nrow(train_mat), get_novelty)
+cat("Average novelty score:", round(mean(novelty_scores, na.rm = TRUE), 4), "\n")
+```
+
+
+---
+
+## Novelty before and after popularity penalty
+
+```{r}
+
+
+# if we apply a popularity penalty to try and push recommendations toward les popular games
+# subtract penalty * popularity from each score before ranking to try and shift the ranking without changing the predicted ratings
+
+get_novelty_penalized <- function(user_idx, penalty = 2) {
+  scores <- recon[user_idx, ]
+  scores[!is.na(train_mat[user_idx, ])] <- NA
+  
+  # popularity of each game in column order
+  ids <- as.integer(colnames(train_mat))
+  pop <- game_pop$popularity[match(ids, game_pop$boardgame_id)]
+  pop[is.na(pop)] <- 0
+  
+  # subtract penalty * popularity from scores
+  scores <- scores - penalty * pop
+  
+  top10 <- order(scores, decreasing = TRUE, na.last = NA)[1:10]
+  rec_ids <- as.integer(colnames(train_mat)[top10])
+  rec_pop <- game_pop$popularity[match(rec_ids, game_pop$boardgame_id)]
+  mean(-log2(rec_pop + 1e-10), na.rm = TRUE)
+}
+
+novelty_penalized <- sapply(1:nrow(train_mat), get_novelty_penalized, penalty = 2)
+
+novelty_compare <- data.frame(
+  Method  = c("Standard", "With Penalty"),
+  Novelty = c(round(mean(novelty_scores,   na.rm = TRUE), 4),
+              round(mean(novelty_penalized, na.rm = TRUE), 4)),
+  RMSE    = c(round(rmse(svd_actual, svd_pred), 4), "unchanged"),
+  MAE     = c(round(mae(svd_actual,  svd_pred), 4), "unchanged")
+)
+
+knitr::kable(novelty_compare, caption = "Novelty before and after popularity penalty")
+```
+
+
+
+## Summary and Findings
+
+**Accuracy**
+
+Both algorithms performed well with NMAE values of 0.0944 for UUCF and 0.0951 for SVD. Random guessing on a 1 to 10 scale would give an NMAE around 0.33 so both methods are doing roughly three times better than that. The results are also much better than what we saw on the Jester dataset in previous projects, which makes sense cos BGG ratings are denser and users tend to only rate games they actually played and have an opinion on, which makes the signal cleaner.
+
+**UUCF vs SVD**
+
+UUCF edged out SVD slightly across all three metrics (RMSE 1.14 vs 1.16, MAE 0.85 vs 0.86, NMAE 0.094 vs 0.095) but the difference is small enough that both approaches are essentially same here. Unlike Project 3 where SVD underperformed more noticeably, the denser ratings matrix here gives SVD better material to work with during imputation, which closes the gap between the two methods.
+
+**Novelty**
+
+The average novelty score without any adjustment was 2.43 meaning the standard SVD recommender is already pulling up some less mainstream games. After applying a popularity penalty that downweights well known games in the ranking, the novelty score jumped to 4.57,nearly double  while RMSE and MAE stayed completely unchanged at 1.16 and 0.86. This makes sense because the penalty only affects which games get ranked to the top of each users list and not the underlying predicted ratings that RMSE and MAE measure. The practical takeaway is that we can meaningfully shift recommendations toward more obscure titles at no accuracy cost. The open question, which you can only answer with online evaluation, is whether users actually engage with those more obscure recommendations or just ignore them. From my practical experience from steam recommendations, i believe they are doing something similar to surface lesser known games. that are similar and rated well but rated in lesser quantities, and its always nice to see the indie and smaller developers get their flowers. 
+
+**What we could only test online**
+
+All of the above is offline evaluation, we are measuring prediction error on held out ratings and not whether users actually liked what they got. The thing we cannot test offline is whether a more novel recommendation leads to better outcomes over time. To test that you would need an A/B test: show one group standard recommendations and another a novelty boosted list, then track things like whether they added new games to their collection or came back to the platform more often. RMSE tells us how close our predicted ratings are to actual ones but it says nothing about whether finding an obscure game someone rates 8 is more valuable to them than the popular one they would have rated 7.5.
+
+
+## References
+
+Kaminskas, M., & Bridge, D. (2016). Diversity, Serendipity, Novelty, and Coverage: A Survey and Empirical Analysis of Beyond-Accuracy Objectives in Recommender Systems. *ACM Transactions on Interactive Intelligent Systems*, 7(1).
+
+BoardGameGeek Top 2000 Dataset: https://www.kaggle.com/datasets/nfedorov/top-2000-board-games-ratings
