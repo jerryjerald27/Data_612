@@ -1,0 +1,23 @@
+---
+title: "DATA612_RD3"
+author: "Jerald Melukkaran"
+date: "2026-07-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Recommender Systems and Bias. Reflecting the uglier truths 
+
+The main issue is that recommender systems tend to learn from human behavior and human behavior already has a ton of bias into it both conscious and subconscious . Our brains run on a machine learning algorithm that learns from prior experiences. So when a collaborative filtering system looks at what similar users rated it is basically encoding whatever patterns exist in that historical data and then amplifying them going forward. The systems are not making independent judgments it is just reflecting the world back at us and the world has problems.
+
+
+The obvious example of this is the feedback loop that we see when the recommender surfaces popular items , the popular items get more clicks and then the more clicks make them look even more popular to the algorithm. Over time the system just keeps recommending the same things to everyone while obscure but possible good content gets buried. Nobody decided to alienate independent artists or smaller creators it just happens naturally because the math drifts that way. I saw a version of this in project 4 with the novelty metric where the standard recommender was already biased toward well known games before I applied any penalty at all.
+
+
+It could start getting problematic if the patterns the model learns happen to lock on into undesirable characteristics specifically protected classes . Lets say a job listing recommender that notices people from certain zip codes or with certain names get fewer clicks on certain listings will just start showing those listings less to similar people. The algorithm never knew about race or gender but it found proxies for them in the data and acted on them anyway. Discriminatory biases from humans could pass on to these models and get amplified . These would be harder to notice cos the code looks fine. We’d have to go hunting for these proxies that we don't know anything about. 
+
+
+The techniques we covered as of now I dont think really help with this. Collaborative filtering amplifies existing patterns by design. SVD compresses the patterns into latent factors but it just makes them harder to inspect. The popularity penalty we used for novelty in project 4 pushes back on the feedback loop a little but it does not touch what the model actually learned. Addressing bias properly I think would require manual intervention at the data level or like adding fairness constraints to the loss function and none of that is part of standard CF or SVD out of the box.
