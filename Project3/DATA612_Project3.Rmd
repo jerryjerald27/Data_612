@@ -1,0 +1,369 @@
+---
+title: "DATA612_Project3"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+date: "2026-06-18"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+
+library(readxl)
+library(dplyr)   
+library(ggplot2)  
+library(tidyr)  
+```
+
+## Intro
+
+In this project we try and implement a matrix factorization recommender system using SVD on the Jester Joke Dataset that we used for the second project . What it does is basically decompose the user item ratings matrix into 3 seperate matrices U, Sigma, and V that together capture the underlying structure of the data. Instead of working with all 100 jokes directly, SVD finds a smaller set of hidden latent factors that try to explain the variation in how people rate jokes. AFter that we can then reconstruct an approximation of the full ratings matrix from just those factors and then use it to predict missing ratings.
+
+One of the challenges with SVD as rightly mentioned in the pdf is that it requires a complete matrix with no missing values. To handle this, we impute each missing rating as the average of the users mean rating and that jokes mean rating. This accounts for both individual rating bias and item bias.It seems to be the right approach instead of just taking a user mean or a joke mean or just replacing it with a universal mean. 
+
+We compare results across different values of k and evaluate using RMSE, MAE, and NMAE just like how we did in Project 2 so we can see how SVD stacks up against the neighborhood based collaborative filtering approaches.
+
+
+## Load and Clean 
+
+```{r load-data}
+raw <- read_excel("jester-data-1.xls", col_names = FALSE)
+ratings <- raw[, -1]
+colnames(ratings) <- paste0("joke", 1:100)
+ratings[ratings == 99] <- NA
+ratings_mat <- as.matrix(ratings)
+cat("Full dataset:", nrow(ratings_mat), "users x", ncol(ratings_mat), "jokes\n")
+cat("Observed ratings:", round(100 * mean(!is.na(ratings_mat)), 1), "%\n")
+```
+
+## Sample and Train/Test split
+
+```{r split}
+set.seed(123)
+
+enough_ratings <- which(rowSums(!is.na(ratings_mat)) >= 20)
+sampled        <- sample(enough_ratings, 100)
+mat            <- ratings_mat[sampled, ]
+observed <- which(!is.na(mat), arr.ind = TRUE)
+test_idx <- sample(nrow(observed), size = round(0.2 * nrow(observed)))
+
+train_mat <- mat
+test_mat  <- matrix(NA, nrow = nrow(mat), ncol = ncol(mat))
+
+for (i in test_idx) {
+  r <- observed[i, 1]
+  c <- observed[i, 2]
+  test_mat[r, c]  <- mat[r, c]
+  train_mat[r, c] <- NA
+}
+
+cat("Training ratings:", sum(!is.na(train_mat)), "\n")
+cat("Test ratings    :", sum(!is.na(test_mat)),  "\n")
+```
+
+## Error Metrics
+
+```{r metrics}
+rmse <- function(actual, pred) sqrt(mean((actual - pred)^2, na.rm = TRUE))
+mae  <- function(actual, pred) mean(abs(actual - pred), na.rm = TRUE)
+nmae <- function(actual, pred) mae(actual, pred) / 20
+```
+
+---
+
+## Imputation
+
+```{r impute}
+user_means <- rowMeans(train_mat, na.rm = TRUE)
+joke_means <- colMeans(train_mat, na.rm = TRUE)
+
+train_imputed <- train_mat
+
+for (i in 1:nrow(train_imputed)) {
+  for (j in 1:ncol(train_imputed)) {
+    if (is.na(train_imputed[i, j])) {
+      train_imputed[i, j] <- (user_means[i] + joke_means[j]) / 2
+    }
+  }
+}
+```
+
+---
+
+## SVD and Prediction
+
+```{r svd}
+#   R: U %*% diag(sigma) %*% t(V)
+#   U : user latent factor matrix
+#   sigma: vector of singular values
+#   V: item latent factor matrix
+#
+# We reconstruct the approximation with only the the top k singular values. 
+#  k when large : closer to the original matrix less compression 
+# k when small: more compression, im guessing smoother predictions by filtering out noise
+
+svd_result <- svd(train_imputed)
+
+predict_svd <- function(svd_obj, k) {
+  # Reconstruct: U_k * diag(sigma_k) * t(V_k)
+  U_k     <- svd_obj$u[, 1:k, drop = FALSE]
+  sigma_k <- diag(svd_obj$d[1:k], nrow = k)
+  V_k     <- svd_obj$v[, 1:k, drop = FALSE]
+  
+  reconstructed <- U_k %*% sigma_k %*% t(V_k)
+  
+  reconstructed <- pmax(-10, pmin(10, reconstructed))
+  
+  test_cells <- which(!is.na(test_mat), arr.ind = TRUE)
+  actual    <- test_mat[test_cells]
+  predicted <- reconstructed[test_cells]
+  
+  data.frame(actual = actual, predicted = predicted)
+}
+```
+
+---
+
+## Evaluate Across multiple k as per suggestions from prior projects
+
+```{r evaluate}
+
+k_values <- c(5, 10, 20, 50, 75)
+
+results <- lapply(k_values, function(k) {
+  preds <- predict_svd(svd_result, k)
+  data.frame(
+    k    = k,
+    RMSE = round(rmse(preds$actual, preds$predicted), 3),
+    MAE  = round(mae(preds$actual,  preds$predicted), 3),
+    NMAE = round(nmae(preds$actual, preds$predicted), 3)
+  )
+})
+
+results_df <- bind_rows(results)
+knitr::kable(results_df, caption = "SVD Performance by k")
+```
+
+---
+
+## Visualization
+
+```{r plot-k}
+
+ggplot(results_df, aes(x = k, y = NMAE)) +
+  geom_line(colour = "#2196F3", linewidth = 1.2) +
+  geom_point(size = 4, colour = "#2196F3") +
+  geom_hline(yintercept = 0.33, linetype = "dashed", colour = "red") +
+  geom_hline(yintercept = 0.20, linetype = "dashed", colour = "blue") +
+  annotate("text", x = 1, y = 0.34, label = "Random baseline (0.33)",
+           hjust = 0, colour = "red",  size = 3.5) +
+  annotate("text", x = 1, y = 0.21, label = "Jester paper benchmark (0.20)",
+           hjust = 0, colour = "blue", size = 3.5) +
+  scale_x_continuous(breaks = k_values) +
+  labs(
+    title    = "SVD: Effect of K on NMAE",
+    subtitle = "",
+    x        = "Number of latent factors : k",
+    y        = "NMAE"
+  ) +
+  theme_minimal()
+```
+
+```{r plot-all-metrics}
+
+results_long <- results_df %>%
+  pivot_longer(cols = c(RMSE, MAE, NMAE), names_to = "Metric", values_to = "Value")
+
+ggplot(results_long, aes(x = k, y = Value, colour = Metric)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 3) +
+  facet_wrap(~Metric, scales = "free_y") +
+  scale_x_continuous(breaks = k_values) +
+  labs(
+    title = "SVD Performance Metrics Across k Values",
+    x     = "K",
+    y     = "Error"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+---
+
+## Comparison to Project 2
+
+```{r comparison}
+
+p2_results <- data.frame(
+  Method = c("UUCF: Pearson", "UUCF:Cosine",
+             "IICF:Pearson", "IICF:Cosine"),
+  RMSE   = c(4.2473, 4.2369, 4.4376, 4.2962),
+  MAE    = c(3.3210, 3.3078, 3.5106, 3.3444),
+  NMAE   = c(0.1660, 0.1654, 0.1755, 0.1672)
+)
+
+best_svd <- results_df[which.min(results_df$NMAE), ]
+svd_row  <- data.frame(
+  Method = paste0("SVD (k=", best_svd$k, ")"),
+  RMSE   = best_svd$RMSE,
+  MAE    = best_svd$MAE,
+  NMAE   = best_svd$NMAE
+)
+
+comparison <- bind_rows(p2_results, svd_row)
+knitr::kable(comparison, caption = "SVD vs Project 2 Collaborative Filtering Methods")
+```
+
+
+## Summary and Findings
+
+**What we did**
+
+We applied SVD to the Jester ratings matrix after imputing missing values as the average of the user mean and the joke mean. SVD decomposes the matrix into latent factors and we reconstruct an approximation using only the top k factors to make predictions
+
+**How do we know it is working**
+
+All five configurations beat the random guessing baseline of 0.33 NMAE, so the model is picking up real structure in the data. The best result was k=5 with an NMAE of 0.208, which is above the 0.20 Jester paper benchmark but still a reasonable result for a simple imputation based approach.
+
+
+**Effect of k**
+
+The results went in the opposite direction from what we might expect. accuracy got worse as k increased. NMAE went up from 0.208 at k=5 all the way to 0.237 at k=75. This tells us that the lower rank approximations are actually cleaner predictions in ouir case. The likely reason im guessing is the imputation step because we filled in a lot of missing values with averages and probably changed the natural structure. Higher k picks up more of that noise rather than more real signal, so keeping k small filters it out.
+
+**SVD vs Collaborative Filtering**
+
+SVD underperformed the neighborhood based methods from Project 2 across all metrics. The best SVD result was noticeably worse than the best CF result . This gap is most likely driven by the imputation. The CF methods from Project 2 only used observed ratings and never had to guess at the missing values, while SVD needed a complete matrix and that filling-in process introduced noise that probaby hurt our predictions.
+
+**Potential issues**
+
+The imputation seems to be the biggest weakness here. Filling missing values with a simple average gives SVD a distorted picture of the data before factorization even starts.
+With only 100 users the results are noisy and may not generalize well.
+SVD has no easy way to update when new ratings come in.
+
+**Possible improvements**
+
+We would need to consider methods that approximates matrix factorization without needing to fill in missing values at all, which would likely close the gap with the CF methods.
+Test on a larger sample to get more stable estimates.
+Add a global mean baseline as a simple lower bound to put all these numbers in better context.
+We could try SGD to see if it makes any difference 
+
+
+
+
+```{r sgd}
+
+#SGD basically learns the user and item factor matrices directly from only the observed ratings by iteratively reducing prediction error 
+# Steps
+#   1. Initialize U : users x k and V : jokes x k with small random values
+#   2. For each observed rating compute error between the actual
+#      rating user.item vector dot product
+#   3. Iteratively Push U and V in the direction that reduces that error
+
+sgd_mf <- function(train_mat, k = 10, learning_rate = 0.01,
+                   lambda = 0.1, n_iter = 50) {
+  n_users <- nrow(train_mat)
+  n_jokes <- ncol(train_mat)
+  
+  # initialize factor matrices with small random values
+  set.seed(612)
+  U <- matrix(rnorm(n_users * k, sd = 0.01), nrow = n_users, ncol = k)
+  V <- matrix(rnorm(n_jokes * k, sd = 0.01), nrow = n_jokes, ncol = k)
+  
+  # get indices of observed training ratings
+  observed <- which(!is.na(train_mat), arr.ind = TRUE)
+  
+  for (iter in 1:n_iter) {
+    # shuffle the order
+    obs_shuffled <- observed[sample(nrow(observed)), ]
+    
+    for (idx in 1:nrow(obs_shuffled)) {
+      u <- obs_shuffled[idx, 1]
+      j <- obs_shuffled[idx, 2]
+      
+      # get drot product prediction
+      pred  <- sum(U[u, ] * V[j, ])
+      error <- train_mat[u, j] - pred
+      
+      # update in the direction that reduces error
+      U[u, ] <- U[u, ] + learning_rate * (error * V[j, ] - lambda * U[u, ])
+      V[j, ] <- V[j, ] + learning_rate * (error * U[u, ] - lambda * V[j, ])
+    }
+  }
+  
+  list(U = U, V = V)
+}
+
+run_sgd <- function(k) {
+  model <- sgd_mf(train_mat, k = k, learning_rate = 0.01,
+                  lambda = 0.1, n_iter = 50)
+  
+  reconstructed <- model$U %*% t(model$V)
+  reconstructed <- pmax(-10, pmin(10, reconstructed))
+  
+  test_cells <- which(!is.na(test_mat), arr.ind = TRUE)
+  actual    <- test_mat[test_cells]
+  predicted <- reconstructed[test_cells]
+  
+  data.frame(actual = actual, predicted = predicted)
+}
+
+results_sgd <- lapply(k_values, function(k) {
+  cat("  k =", k, "\n")
+  preds <- run_sgd(k)
+  data.frame(
+    k    = k,
+    RMSE = round(rmse(preds$actual, preds$predicted), 4),
+    MAE  = round(mae(preds$actual,  preds$predicted), 4),
+    NMAE = round(nmae(preds$actual, preds$predicted), 4)
+  )
+})
+
+results_sgd_df <- bind_rows(results_sgd)
+knitr::kable(results_sgd_df, caption = "SGD performance by k")
+
+# Comparing
+all_methods <- bind_rows(
+  results_df          %>% mutate(Method = "SVD Blended Imputation"),
+  results_sgd_df      %>% mutate(Method = "SGD No Imputation")
+)
+
+ggplot(all_methods, aes(x = k, y = NMAE, colour = Method)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 3) +
+  geom_hline(yintercept = 0.33, linetype = "dashed", colour = "red") +
+  geom_hline(yintercept = 0.20, linetype = "dashed", colour = "blue") +
+  annotate("text", x = 1, y = 0.34, label = "Random baseline (0.33)",
+           hjust = 0, colour = "red",  size = 3.5) +
+  annotate("text", x = 1, y = 0.21, label = "Jester paper benchmark (0.20)",
+           hjust = 0, colour = "blue", size = 3.5) +
+  scale_x_continuous(breaks = k_values) +
+  labs(
+    title    = "SVD vs SGD: NMAE Across k Values",
+    subtitle = "Lower better",
+    x        = "Number of latent factors (k)",
+    y        = "NMAE",
+    colour   = "Method"
+  ) +
+  theme_minimal()
+```
+
+
+## SGD vs SVD
+
+Suprisingly SGD underperformed SVD imputation methods across all k values with a best NMAE of 0.222 at k=5 compared to 0.208 for SVD with imputation. SGD avoids the imputation problem entirely by only learning from observed ratings. 
+
+This leads me to believe that the likely explanation is the small sample size we are working with .Only 100 users and 50 iterations, SGD probably doesnt have enough data or training time to converge to a good solution. The pattern of getting worse as k increases also held here which matches what we saw with SVD.
+
+The results across all methods tell a consistent story. with a sample this small, it seems like simpler is better. Lower k values outperform higher ones across every method and the more complex SGD approach didnt get enough data to show its advantages over imputation based SVD. With a larger sample and more iterations SGD would likely pull ahead since it isnt distorting the matrix with artificial values before factorization starts. But then i wont be able to test higher sample numbers cos my environment doesent allow for it.  
+
+All methods beat random guessing comfortably but none of them closed the gap with the neighborhood based CF results from Project 2. 
+
+## References
+
+Goldberg, K., Roeder, T., Gupta, D., & Perkins, C. (2001). Eigentaste: A Constant Time Collaborative Filtering Algorithm. *Information Retrieval*, 4(2), 133-151. https://goldberg.berkeley.edu/jester-data/

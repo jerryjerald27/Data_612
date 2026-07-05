@@ -379,7 +379,7 @@ better.</p>
 <h2>Loading and cleaning</h2>
 <pre class="r"><code>#   Column 1 is how many jokes that user rated , we can drop this
 #   Columns 2 to 101 is the the users rating for jokes 1 to 100
-# Ratings go from -10 to +10. 99 means &quot;not rated&quot; which we replace with NA.
+# Ratings go from -10 to +10. 99 means not rated which we replace with NA.
 
 raw &lt;- read_excel(&quot;jester-data-1.xls&quot;, col_names = FALSE)
 ratings &lt;- raw[, -1]
