@@ -20,6 +20,7 @@ For the final project I am building a hybrid recomender system on the full Board
 19 million ratings, 411,000 users, 22,000 games
 
 **Files**
+
 - Ratings file: user, game ID, rating
 - Games metadata file: game ID, title, category, mechanics, average weight, year published, min/max players
 
@@ -45,16 +46,20 @@ For users with enough ratings the final recommendation score will be a weighted 
 Trying to build on feedback from previous projects, Ill try and go beyond prediction error metrics and include a fuller evaluation set
 
 **Accuracy metrics (same as previous)**
+
 - RMSE, MAE, NMAE on a held out test set
 - Evaluated for ALS alone and the hybrid system separately
 
 **Recommendation quality metrics**
+
 - Precision and Recall for each user, generate a top k recommendation list and measure how many of the held out test items appear in it. This is more realistic measure of quality because it reflects what actually gets shown to a user.
 - NDCG to measure ranking quality giving more credit for relevant items appearing higher in the list
 - Diversity is average pairwise dissimilarity within a recommendation list, similar to the novelty analysis in project 4 but measuring within list variety rather than popularity
 
 **Parameter tuning**
+
 Rather than fixing parameters at one value the way project 5 did we will run a parameter sweep depending on runtime constraints 
+
 - Rank: 5, 10, 20, 50
 - Iterations: 5, 10, 20
 - Regularization: 0.01, 0.1, 0.5
@@ -62,6 +67,7 @@ Rather than fixing parameters at one value the way project 5 did we will run a p
 Report accuracy and runtime for each combination to find the best tradeoff.
 
 **Comparing Runtime across data sizes**
+
 Testing on three data sizes a 10%,50% and the full dataset to plot runtime vs data size. Basically to find  what Spark is actually adding and at what scale it becomes necessary, building on the project 5 conclusion.
 
 ---

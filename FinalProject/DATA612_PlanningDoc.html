@@ -1514,9 +1514,12 @@ Ill be trying to solve.</p>
 <h2>Dataset</h2>
 <p><strong>Source:</strong> BoardGameGeek Database from Kaggle (<a href="https://www.kaggle.com/datasets/threnjen/board-games-database-from-boardgamegeek" class="uri">https://www.kaggle.com/datasets/threnjen/board-games-database-from-boardgamegeek</a>)</p>
 <p>19 million ratings, 411,000 users, 22,000 games</p>
-<p><strong>Files</strong> - Ratings file: user, game ID, rating - Games
-metadata file: game ID, title, category, mechanics, average weight, year
-published, min/max players</p>
+<p><strong>Files</strong></p>
+<ul>
+<li>Ratings file: user, game ID, rating</li>
+<li>Games metadata file: game ID, title, category, mechanics, average
+weight, year published, min/max players</li>
+</ul>
 <hr />
 </div>
 <div id="design" class="section level2">
@@ -1551,28 +1554,38 @@ rated so far.</p>
 <h2>Evaluation Plan</h2>
 <p>Trying to build on feedback from previous projects, Ill try and go
 beyond prediction error metrics and include a fuller evaluation set</p>
-<p><strong>Accuracy metrics (same as previous)</strong> - RMSE, MAE,
-NMAE on a held out test set - Evaluated for ALS alone and the hybrid
-system separately</p>
-<p><strong>Recommendation quality metrics</strong> - Precision and
-Recall for each user, generate a top k recommendation list and measure
-how many of the held out test items appear in it. This is more realistic
-measure of quality because it reflects what actually gets shown to a
-user. - NDCG to measure ranking quality giving more credit for relevant
-items appearing higher in the list - Diversity is average pairwise
-dissimilarity within a recommendation list, similar to the novelty
-analysis in project 4 but measuring within list variety rather than
-popularity</p>
-<p><strong>Parameter tuning</strong> Rather than fixing parameters at
-one value the way project 5 did we will run a parameter sweep depending
-on runtime constraints - Rank: 5, 10, 20, 50 - Iterations: 5, 10, 20 -
-Regularization: 0.01, 0.1, 0.5</p>
+<p><strong>Accuracy metrics (same as previous)</strong></p>
+<ul>
+<li>RMSE, MAE, NMAE on a held out test set</li>
+<li>Evaluated for ALS alone and the hybrid system separately</li>
+</ul>
+<p><strong>Recommendation quality metrics</strong></p>
+<ul>
+<li>Precision and Recall for each user, generate a top k recommendation
+list and measure how many of the held out test items appear in it. This
+is more realistic measure of quality because it reflects what actually
+gets shown to a user.</li>
+<li>NDCG to measure ranking quality giving more credit for relevant
+items appearing higher in the list</li>
+<li>Diversity is average pairwise dissimilarity within a recommendation
+list, similar to the novelty analysis in project 4 but measuring within
+list variety rather than popularity</li>
+</ul>
+<p><strong>Parameter tuning</strong></p>
+<p>Rather than fixing parameters at one value the way project 5 did we
+will run a parameter sweep depending on runtime constraints</p>
+<ul>
+<li>Rank: 5, 10, 20, 50</li>
+<li>Iterations: 5, 10, 20</li>
+<li>Regularization: 0.01, 0.1, 0.5</li>
+</ul>
 <p>Report accuracy and runtime for each combination to find the best
 tradeoff.</p>
-<p><strong>Comparing Runtime across data sizes</strong> Testing on three
-data sizes a 10%,50% and the full dataset to plot runtime vs data size.
-Basically to find what Spark is actually adding and at what scale it
-becomes necessary, building on the project 5 conclusion.</p>
+<p><strong>Comparing Runtime across data sizes</strong></p>
+<p>Testing on three data sizes a 10%,50% and the full dataset to plot
+runtime vs data size. Basically to find what Spark is actually adding
+and at what scale it becomes necessary, building on the project 5
+conclusion.</p>
 <hr />
 </div>
 <div id="anticipated-challenges" class="section level2">
