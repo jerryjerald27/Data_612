@@ -1,0 +1,90 @@
+---
+title: "DATA612_FinalProjectPlaning"
+date: "2026-07-09"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+---
+
+
+For the final project I am building a hybrid recomender system on the full BoardGameGeek dataset which holds 19 million ratings from 411,000 users across 22,000 games. This is a significant scale up from the Top 2000 subset used in projects 4 and 5, which had around 1 million ratings and 200 sampled users. Im not expecting the algorithms that worked fine on the smaller subset to hold up at this scale and that is the problem Ill be trying to solve.
+
+---
+
+## Dataset
+
+**Source:** BoardGameGeek Database from Kaggle (https://www.kaggle.com/datasets/threnjen/board-games-database-from-boardgamegeek)
+
+19 million ratings, 411,000 users, 22,000 games
+
+**Files**
+- Ratings file: user, game ID, rating
+- Games metadata file: game ID, title, category, mechanics, average weight, year published, min/max players
+
+
+---
+
+## Design
+The plan is a hybrid recomender that combines two approaches:
+
+**Collaborative Filtering with Spark ALS**
+The core of the system is ALS matrix factorization running on Spark, the same implementation from project 5. At 19 million ratings and 411,000 users a pure R implementation is not viable and the user similarity matrix from UUCF and SVD on the full unsampled matrix would exceed RAM on any typical machine. Spark ALS distributes the computation across workers and handles this scale without needing to sample down. We would be trying to work at a similar scale to the spotify talk engineer who was working with aroung 4 million users.
+
+**Content Based Filtering for Cold Start**
+The metadata file has game category, mechanics, and complexity weight for all 22000 games. New games or users with very few ratings will not have enough collaborative signal for ALS to work well. The content layer would use TF IDF on game categories and mechanics to try and build item profiles and resort back to content similarity when ALS confidence is low. This hybrid that uses collaborative signal when it exists and content features when it does not would be the unique factor for this project along with the scale.
+
+For users with enough ratings the final recommendation score will be a weighted blend of the ALS predicted rating and the content similarity score. For cold start users with fewer than 10 ratings the system would fall back  to content based recommendations based on the games they have rated so far.
+
+
+---
+
+## Evaluation Plan
+
+Trying to build on feedback from previous projects, Ill try and go beyond prediction error metrics and include a fuller evaluation set
+
+**Accuracy metrics (same as previous)**
+- RMSE, MAE, NMAE on a held out test set
+- Evaluated for ALS alone and the hybrid system separately
+
+**Recommendation quality metrics**
+- Precision and Recall for each user, generate a top k recommendation list and measure how many of the held out test items appear in it. This is more realistic measure of quality because it reflects what actually gets shown to a user.
+- NDCG to measure ranking quality giving more credit for relevant items appearing higher in the list
+- Diversity is average pairwise dissimilarity within a recommendation list, similar to the novelty analysis in project 4 but measuring within list variety rather than popularity
+
+**Parameter tuning**
+Rather than fixing parameters at one value the way project 5 did we will run a parameter sweep depending on runtime constraints 
+- Rank: 5, 10, 20, 50
+- Iterations: 5, 10, 20
+- Regularization: 0.01, 0.1, 0.5
+
+Report accuracy and runtime for each combination to find the best tradeoff.
+
+**Comparing Runtime across data sizes**
+Testing on three data sizes a 10%,50% and the full dataset to plot runtime vs data size. Basically to find  what Spark is actually adding and at what scale it becomes necessary, building on the project 5 conclusion.
+
+---
+
+## Anticipated Challenges
+
+**Memory and runtime:** The full dataset is around 19 million rows. Copying it into Spark and running ALS will take meaningfully longer than project 5. I'll see how far i can push 
+
+**Content feature quality:** The category and mechanics fields in the BGG metadata are strings with multiple values per game. They will need parsing and cleaning before TF-IDF can be applied cleanly.
+
+**Cold start threshold:** Deciding where to switch from collaborative to content based is a tuning decision. Will experiment with a few thresholds and report which works best.
+
+---
+
+## Summary
+
+So to summarize 
+
+- Collaborative filtering with spark ALS with sparklyr 
+- Content feautres would be TF-IDF on category and mechanics 
+- Fallback to content based handles the cold start
+- Evaluation with RMSE, MAE, NMAE, Precision, Recall, NDCG, and Diversity
+- PLatform would be local spark via sparklyr in R 
+
+
+Board games are a sparse recommendation problem compared to something like movies. A typical user on BGG has rated maybe 50 to 100 games out of 22,000 available. That sparsity makes cold start a real problem cos a new game that just launched has no ratings yet but might be a perfect fit for someone based on its mechanics. The hybrid approach should hopefully addresses this and make the system more useful in practice than a pure collaborative filtering approach would be. The scale also means this is a realistic test of when Spark becomes necessary rather than optional. In project 5 Spark was technically overkill for 200 users. At 411,000 users it is not optional anymore.
