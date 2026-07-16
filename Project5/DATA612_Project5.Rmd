@@ -1,7 +1,11 @@
 ---
 title: "DATA612_Project5"
-output: html_document
-date: "2026-07-05"
+date: "2026-07-03"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
 ---
 
 ```{r setup, include=FALSE}
@@ -11,10 +15,216 @@ knitr::opts_chunk$set(
 	warning = FALSE
 )
 ```
+## Overview
 
-```{r}
-install.packages("sparklyr")
+In this project I try and adapt the board game geek recommender system from Project 4 to run on spark using sparklyr and sparks built in ALS implementation. It works by alternating between solving for user factors and item factors until convergence, the same algorithm discussed in the spotify initial algo talk from the discussion posts. We compare the spark ALS results against the UUCF and SVD results from Project 4 on accuracy, and discuss the tradeoffs and at what scale moving to a distributed platform would actually make sense.
+
+---
+
+## Setting up the connection in local mode
+
+```{r setup-spark}
 library(sparklyr)
-spark_install()
+library(dplyr)
+library(tidyr)
+library(arrow)
+library(ggplot2)
+
+sc <- spark_connect(master = "local")
 ```
 
+---
+
+## Loading Data
+
+```{r load-data}
+# load ratings the same way as project 4
+ratings_raw <- read_feather("bgg_ratings_top_2000.feather",
+                             col_select = c("nickname", "boardgame_id", "rating"))
+ratings_raw <- ratings_raw %>% filter(!is.na(rating))
+
+# filter to active users and games same as before
+user_counts <- ratings_raw %>% count(nickname)
+game_counts <- ratings_raw %>% count(boardgame_id)
+
+ratings_filtered <- ratings_raw %>%
+  filter(nickname %in% (user_counts %>% filter(n >= 20) %>% pull(nickname)),
+         boardgame_id %in% (game_counts %>% filter(n >= 50) %>% pull(boardgame_id)))
+
+set.seed(1234)
+sampled_users  <- sample(unique(ratings_filtered$nickname), 200)
+ratings_sample <- ratings_filtered %>% filter(nickname %in% sampled_users)
+
+cat("Sample", nrow(ratings_sample), "ratings,",
+    n_distinct(ratings_sample$nickname), "users,",
+    n_distinct(ratings_sample$boardgame_id), "games\n")
+```
+
+---
+
+## Preparing Data for Spark ALS
+
+```{r prep-spark}
+# requires integer user and item IDs not strings so we convert nicknames to a numeric user index
+
+user_index <- ratings_sample %>%
+  distinct(nickname) %>%
+  mutate(user_id = row_number())
+
+game_index <- ratings_sample %>%
+  distinct(boardgame_id) %>%
+  mutate(game_idx = row_number())
+
+ratings_indexed <- ratings_sample %>%
+  left_join(user_index, by = "nickname") %>%
+  left_join(game_index, by = "boardgame_id") %>%
+  select(user_id, game_idx, rating)
+
+
+ratings_spark <- copy_to(sc, ratings_indexed, "ratings", overwrite = TRUE)
+
+```
+
+---
+
+## Train Test Split
+
+```{r split}
+# split 80 20 
+splits <- ratings_spark %>%
+  sdf_random_split(training = 0.8, test = 0.2, seed = 612)
+
+train_spark <- splits$training
+test_spark  <- splits$test
+
+cat("training :", sdf_nrow(train_spark), "\n")
+cat("test     :", sdf_nrow(test_spark),  "\n")
+```
+
+---
+
+## Error Metrics
+
+```{r metrics}
+# same metrics as all previous projects
+rmse <- function(a, p) sqrt(mean((a - p)^2, na.rm = TRUE))
+mae  <- function(a, p) mean(abs(a - p), na.rm = TRUE)
+nmae <- function(a, p) mae(a, p) / 9
+```
+
+---
+
+## Spark ALS
+
+```{r als}
+# ALS factorizes the ratings matrix into user/item factor matrices and then alternates between solving for each until convergence
+
+# Thinking about the key parameters:
+# rank = 10 : number of latent factors, to have a good comparison with SVD k=10 in project 4
+# max_iter = 10 : standard for this size,  reg_param = 0.1 : regularization standard 
+
+start_time <- Sys.time()
+
+als_model <- ml_als(
+  train_spark,
+  rating_col      = "rating",
+  user_col        = "user_id",
+  item_col        = "game_idx",
+  rank            = 10,
+  max_iter        = 10,
+  reg_param       = 0.1,
+  cold_start_strategy = "drop"
+)
+
+end_time <- Sys.time()
+als_time <- round(as.numeric(difftime(end_time, start_time, units = "secs")), 2)
+cat("ALS training time:", als_time, "seconds\n")
+```
+
+---
+
+## Generate Predictions and Evaluate
+
+```{r evaluate}
+
+predictions <- ml_predict(als_model, test_spark) %>%
+  filter(!is.na(prediction)) %>%      
+  collect()                           
+
+predictions <- predictions %>%
+  mutate(prediction = pmax(1, pmin(10, prediction)))
+
+als_rmse <- round(rmse(predictions$rating, predictions$prediction), 4)
+als_mae  <- round(mae(predictions$rating,  predictions$prediction), 4)
+als_nmae <- round(nmae(predictions$rating, predictions$prediction), 4)
+
+cat("ALS => RMSE:", als_rmse, "MAE:", als_mae, "NMAE:", als_nmae, "\n")
+```
+
+---
+
+## Comparison with Project 4
+
+```{r comparison}
+# project 4 results for reference
+results <- data.frame(
+  Algorithm = c("UUCF – Pearson (k=15)", "SVD (k=10)", "Spark ALS (rank=10)"),
+  RMSE      = c(1.1439, 1.1551, als_rmse),
+  MAE       = c(0.8496, 0.8555, als_mae),
+  NMAE      = c(0.0944, 0.0951, als_nmae)
+)
+
+knitr::kable(results, caption = "UUCF vs SVD vs Spark ALS")
+```
+
+---
+
+## Runtime Comparison
+
+```{r runtime}
+runtime <- data.frame(
+  Algorithm = c("UUCF – Pearson", "SVD", "Spark ALS"),
+  Runtime_seconds = c(10, 9, als_time)
+)
+
+knitr::kable(runtime, caption = "Approximate Training Runtime by Algorithm")
+```
+
+---
+
+## Disconnect Spark
+
+```{r disconnect}
+spark_disconnect(sc)
+```
+
+---
+
+## Summary and Findings
+
+**Accuracy**
+
+All three algorithms performed well and came in close to each other. UUCF led with an NMAE of 0.0944, SVD came in at 0.0951, and spark ALS at 0.0964. The differences are small enough that in practice i feel like any of the three would be a reasonable choice for this dataset. All three are well below the random guessing baseline of around 0.33 so the signal being picked up is real.
+
+
+**Spark ALS vs Project 4**
+
+Spark ALS came in slightly behind UUCF and SVD on all three metrics but not by much. The small accuracy gap is probably because ALS uses an iterative approximation while SVD computes an exact decomposition even though theyre both solving for matrix factorization. With more iterations or tuned regularization im thinking ALS would likely close that gap.
+
+**Efficiency and complexity**
+
+This is where the tradeoff gets interesting. Spark ALS took about 5 seconds to train while the  project 4 knit with UUCF when it ran , ran anywhere between 9-10  seconds. While The 5 seconds for spark is just the ALS training step and does not count the time to spin up the spark session, serialize the data and copy it into spark, or the added complexity of converting user ids to integers and managing the spark connection. For a dataset of 200 users spark i believe is genuinely overkill and the simpler R implementations from project 4 are easier to write and debug. You also dont see the 40 minutes I spent to try and get spark running correctly in R. 
+
+**When would Spark become necessary**
+
+For this specific dataset I would put the threshold somewhere around 50000 active users. Below that a decently optimized R implementation can handle it with sampling. Above that the pairwise similarity calcualtions in UUCF become difficult and SVD on the full unsampled matrix would exceed typical machine RAM. ALS on spark seems to avoid both problems because it distributes the matrix across workers so no single machine needs to hold all of it. I remember the use case from the spotify engineers talk which put this in perspective. They were running ALS on 4 million users and 500000 artists on a 700 node cluster. That is the kind of scale where there is simply no alternative to a distributed platform and where the added complexity of spark pays for itself.
+
+---
+
+## References
+
+Goldberg, K., Roeder, T., Gupta, D., & Perkins, C. (2001). Eigentaste: A Constant Time Collaborative Filtering Algorithm. *Information Retrieval*, 4(2), 133-151.
+
+BoardGameGeek Top 2000 Dataset: https://www.kaggle.com/datasets/nfedorov/top-2000-board-games-ratings
+
+Sparklyr documentation: https://spark.rstudio.com
