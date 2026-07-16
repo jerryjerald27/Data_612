@@ -1,0 +1,20 @@
+---
+title: "RD4"
+output: html_document
+date: "2026-07-11"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I went through the wired article and the main problem it lays out is that recommender systems optimize for whatever is easiest to measure and that often always ends up being clicks and time on site. There is no standard metric that measures societal harm and penalizes it, so  extreme and sensational content generates more engagement than moderate content and the algorithm just naturally drifts toward amplifying it without anyone deliberately deciding to do that. The author goes from babies and recipes to far right videos and russian craft pins in one night just from clicking through a set of troll pinterest boards. The algorithm saw engagement with the content being served and followed it up with more of the pattern. It had no idea it was doing anything wrong which is a big problem.
+
+
+Whats intereseting is that this is not really a technical problem at its core. The companies know this is happening. Youtube knew early enough to build 'project redirect'which actively serves deradicalization content to users who appear to be going down an extremist path instead of just recommending more of the same. That is the direct opposite of how collaborative filtering normally works and it shows the machinery can be pointed in the opposite direction if there is enough will to do it. The fact that they built that for violent extremism and then did basically nothing about the general algorithm radicalizing people in other areas tells you everything about where the priorities actually are. The echo chambers being formed under their noses only seem to matter to the big corporations if it starts to get the government or intelligence agencies involved in thier business or when it starts to hurt their pockets. 
+
+
+The most useful way the article gives for how to actually counter this is the difference between allowing content and amplifying it. Platforms tend to claim free speech arguments when pushed on questions regarding moderation but the article makes the point that there is no right to algorithmic amplification. The recommender is already deciding what you see, the question is just whether those decisions are being made thoughtfully or purely on engagement. A possible 'do not amplify' list based on platform would mean the algorithm works normally for most content but certain categories get excluded from the recommendation pool even before the ranking even happens. This is actually something you could implement without reinventing the whole system. It is basically the same idea as the popularity penalty concept I used in project 4 except instead of downweighting popular games you are zeroing out harmful content categories before they can get surfaced to new users who never went looking.
+
+
+The last piece the article covers is giving users more control, like the twitter filter that lets people avoid low quality accounts. The problem with that approach is that most people never change default settings so it really only helps the users who are already aware enough to go looking for the option. It is a way for platforms to say they offered tools without actually fixing anything. Real mitigation has to happen at the system level. Do not amplify list approach scales pretty well, but there is a limit to how intrusive user controls can get before it steps on the experience . And honestly speaking,  given how much influence these systems have over what information people are exposed to at this point, leaving it up to individual users to opt into safety features seems like a convenient way for platforms to avoid taking responsibility for what their recommenders actually do.
