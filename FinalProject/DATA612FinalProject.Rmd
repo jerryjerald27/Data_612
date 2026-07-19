@@ -1,0 +1,814 @@
+---
+title: "DATA612FinalProject"
+date: "2026-07-15"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+## Overview
+
+in this project I build a hybrid recommender system on the full BoardGameGeek dataset 15 million ratings sampled down to approx 5 million from hundreds of thousands of users across 22,000 games. The system is designed as a board game marketplace analogous to Steam, the video game marketplace with two separate recommendation streams serving different user intents.
+
+**Stream 1 :Discovery:** 
+
+This stream would be focussed on surfacing games similar to what the user already likes, optimizing for relevance and retention. Evaluated on Precision@K and NDCG.
+
+**Stream 2 :Surprise Me:** 
+
+This stream surfaces niche, newer, or underrated games the user would not find on their own. Evaluated on novelty, diversity, and serendipity with a minimum precision floor.
+
+
+The core algorithm is Spark ALS running via sparklyr, which is necessary at this scale as a pure R implementation would run out of memory on the full dataset. A content based layer using TF-IDF on game categories and mechanics handles cold start for users with very few ratings. Throughout the project we tune parameters systematically to match the goals of each of the two streams rather than just optimizing for accuracy metrics, building on feedback and findings from all previous projects in the course. 
+
+---
+
+## The Plan 
+
+* Load and filter the 15 million strong BGG dataset to a workable size while staying well above the 1M+ rating requirement
+* Train a Spark ALS model as the core collaborative filtering engine
+* Evaluate accuracy with RMSE, MAE, and NMAE and recommender quality with Precision@10, Recall@10, and NDCG
+* Build two separate recommendation streams from the same ALS model using different post-processing and ranking logic
+* Tune ALS parameters systematically with reg_param as the anchor based on project 5 findings, optimizing for Stream 1 accuracy
+* Tune the popularity penalty for Stream 2 separately, finding the best tradeoff between novelty and the minimum precision floor
+* Evaluate Stream 2 on novelty and serendipity in addition to precision
+* Simulate cold start evaluation by comparing ALS against a TF-IDF content based layer for lower activity users
+
+
+---
+
+## Libraries and Spark Setup
+
+We are going to run a local instance of spark and let it work with 4 gigs of RAM as I was having issues with lower amounts 
+
+```{r spark-setup}
+library(sparklyr)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(ggplot2)
+library(tm)
+library(proxy)
+
+config <- spark_config()
+config$`sparklyr.shell.driver-memory` <- "4G"
+sc <- spark_connect(master = "local", config = config)
+```
+
+---
+
+## Load and Filter Data  (Runtime 4s) 
+
+We will load only the columns we need from the reviews file. Specifically user, ID and rating 
+
+
+```{r load-data}
+cat("Loading...\n")
+ratings_raw <- read_csv("bgg-15m-reviews.csv",
+                         col_select = c("user", "ID", "rating"),
+                         show_col_types = FALSE)
+ratings_raw <- ratings_raw %>%
+  rename(nickname = user, boardgame_id = ID) %>%
+  filter(!is.na(rating), !is.na(nickname), !is.na(boardgame_id))
+
+cat("Raw ratings:", nrow(ratings_raw), "\n")
+cat("Rating range:", min(ratings_raw$rating), "to", max(ratings_raw$rating), "\n")
+```
+We then  filter to active users and well-rated games. Users with at least 200 ratings and games rated by at least 1000 users to try and remove noise and make the dataset more manageable 
+
+
+```{r filter-data}
+
+user_counts <- ratings_raw %>% count(nickname)
+game_counts <- ratings_raw %>% count(boardgame_id)
+
+ratings_filtered <- ratings_raw %>%
+  filter(
+    nickname     %in% (user_counts %>% filter(n >= 200)  %>% pull(nickname)),
+    boardgame_id %in% (game_counts %>% filter(n >= 1000) %>% pull(boardgame_id))
+  )
+
+cat("After filtering:", nrow(ratings_filtered), "ratings\n")
+cat("Users          :", n_distinct(ratings_filtered$nickname), "\n")
+cat("Games          :", n_distinct(ratings_filtered$boardgame_id), "\n")
+
+write_csv(ratings_filtered, "bgg_filtered.csv")
+```
+
+We now load game metadata for content layer and novelty scoring
+
+```{r load-games}
+games_raw <- read_csv("games_detailed_info.csv",
+                       col_select = c("id", "primary", "boardgamecategory",
+                                      "boardgamemechanic", "usersrated"),
+                       show_col_types = FALSE) %>%
+  rename(boardgame_id = id, title = primary)
+
+cat("Games metadata loaded:", nrow(games_raw), "games\n")
+```
+
+---
+
+## Copy to Spark  (15 seconds)
+
+We then copy the data to our local spark instance 
+
+```{r spark-load}
+# convert user and game IDs to integers for Spark 
+user_index <- ratings_filtered %>%
+  distinct(nickname) %>%
+  mutate(user_id = row_number())
+
+game_index <- ratings_filtered %>%
+  distinct(boardgame_id) %>%
+  mutate(game_idx = row_number())
+
+ratings_indexed <- ratings_filtered %>%
+  left_join(user_index, by = "nickname") %>%
+  left_join(game_index, by = "boardgame_id") %>%
+  select(user_id, game_idx, rating)
+
+cat("Copying...\n")
+ratings_spark <- copy_to(sc, ratings_indexed, "ratings", overwrite = TRUE)
+cat("Done\n")
+```
+
+---
+
+## Train / Test Split 16 seconds 
+
+We create a train test split 
+
+```{r split}
+set.seed(612)
+splits <- ratings_spark %>%
+  sdf_random_split(training = 0.8, test = 0.2, seed = 612)
+
+train_spark <- splits$training
+test_spark  <- splits$test
+
+cat("Training:", sdf_nrow(train_spark), "\n")
+cat("Test    :", sdf_nrow(test_spark),  "\n")
+```
+
+---
+
+## Error Metrics
+
+```{r metrics}
+# same metrics as all previous projects
+# BGG is a 1-10 scale so NMAE divides by 9
+rmse <- function(a, p) sqrt(mean((a - p)^2, na.rm = TRUE))
+mae  <- function(a, p) mean(abs(a - p), na.rm = TRUE)
+nmae <- function(a, p) mae(a, p) / 9
+```
+
+---
+
+## Spark ALS : Core Model (70 seconds)
+
+Now we build the core model of our recommender . We are going to pick our ALS parameter anchors based on the project 5 findings
+* rank = 10: anchor from SVD k=10, project 5 sweep showed rank has less impact than reg
+* max_iter = 10: project 5 showed diminishing returns beyond 10 iterations
+* reg_param = 0.1: clear winner in project 5 parameter sweep across all configurations
+
+```{r als}
+
+cat("Training ALS model...\n")
+start_time <- Sys.time()
+
+als_model <- ml_als(
+  train_spark,
+  rating_col          = "rating",
+  user_col            = "user_id",
+  item_col            = "game_idx",
+  rank                = 10,
+  max_iter            = 10,
+  reg_param           = 0.1,
+  cold_start_strategy = "drop"
+)
+
+end_time <- Sys.time()
+als_time <- round(as.numeric(difftime(end_time, start_time, units = "secs")), 2)
+cat("ALS training time:", als_time, "seconds\n")
+```
+
+---
+
+## Accuracy Evaluation (5s)
+
+Now evaluating accuracy metrics RMSE, MAE, NMAE
+
+```{r accuracy}
+predictions <- ml_predict(als_model, test_spark) %>%
+  filter(!is.na(prediction)) %>%
+  sdf_sample(fraction = 0.5, seed = 612) %>%   # sample 50% of test predictions
+  collect() %>%
+  mutate(prediction = pmax(1, pmin(10, prediction)))
+
+cat("Predictions collected:", nrow(predictions), "\n")
+cat("RMSE:", round(rmse(predictions$rating, predictions$prediction), 4),
+    "| MAE:", round(mae(predictions$rating, predictions$prediction), 4),
+    "| NMAE:", round(nmae(predictions$rating, predictions$prediction), 4), "\n")
+```
+
+---
+
+## Recommender Metrics - Precision, Recall, NDCG (200s)
+
+And now the other important recommender metrics, Precision, Recall and NDCG
+
+```{r rec-metrics}
+relevant_threshold <- 7
+
+precision_vals <- recall_vals <- ndcg_vals <- c()
+test_users <- unique(predictions$user_id)
+
+for (u in test_users) {
+  user_preds <- predictions %>%
+    filter(user_id == u) %>%
+    arrange(desc(prediction))
+
+  if (nrow(user_preds) < 1) next
+
+  top_k  <- head(user_preds, 10)$game_idx
+  rel    <- predictions %>%
+    filter(user_id == u, rating >= relevant_threshold) %>%
+    pull(game_idx)
+
+  if (length(rel) == 0) next
+
+  hits <- sum(top_k %in% rel)
+  precision_vals <- c(precision_vals, hits / 10)
+  recall_vals    <- c(recall_vals,    hits / length(rel))
+
+  dcg  <- sum(sapply(seq_along(top_k), function(i)
+    if (top_k[i] %in% rel) 1 / log2(i + 1) else 0))
+  idcg <- sum(1 / log2(seq(1, min(length(rel), 10)) + 1))
+  ndcg_vals <- c(ndcg_vals, if (idcg > 0) dcg / idcg else 0)
+}
+
+cat("Precision@10:", round(mean(precision_vals, na.rm = TRUE), 4), "\n")
+cat("Recall@10   :", round(mean(recall_vals,    na.rm = TRUE), 4), "\n")
+cat("NDCG        :", round(mean(ndcg_vals,       na.rm = TRUE), 4), "\n")
+```
+
+---
+
+## Content-Based Layer (TF-IDF)  - 9 seconds
+
+
+Now we are going to build the content based layer with vectors from category and mechanics for the games which would be used for the Stream 2 ranking and for a cold start simulation.  
+
+```{r content-layer}
+
+games_content <- games_raw %>%
+  filter(!is.na(boardgamecategory) | !is.na(boardgamemechanic)) %>%
+  mutate(
+    content = paste(
+      ifelse(is.na(boardgamecategory), "", boardgamecategory),
+      ifelse(is.na(boardgamemechanic), "", boardgamemechanic)
+    )
+  ) %>%
+  select(boardgame_id, title, content, usersrated)
+
+corpus <- Corpus(VectorSource(games_content$content))
+corpus <- tm_map(corpus, content_transformer(tolower))
+corpus <- tm_map(corpus, removePunctuation)
+corpus <- tm_map(corpus, removeWords, stopwords("english"))
+corpus <- tm_map(corpus, stripWhitespace)
+
+dtm      <- DocumentTermMatrix(corpus,
+              control = list(weighting = function(x) weightTfIdf(x, normalize = TRUE)))
+tfidf_mat <- as.matrix(dtm)
+rownames(tfidf_mat) <- games_content$boardgame_id
+
+cat("TF-IDF matrix:", nrow(tfidf_mat), "games x", ncol(tfidf_mat), "terms\n")
+```
+
+---
+
+This is where our business goals split into two. Instead of fighting with the user and having the recommender have to decide how to balance parameters between metrics like precision and novelty we will try and simulate how popular video game marketplaces like steam do things. Give users the choice to choose what they want to see. We will have one stream focused on discovering games similar to the ones you liked and played, and another stream that recommends new and interesting games that you might still enjoy. 
+
+
+## Stream 1 : Discovery
+
+ THis is our basic standard ALS ranking, no penalty. Stream 1 tries to optimise Precision and Recall. Surface games the user will almost certainly enjoy. This is the page most users will be on most times when they feel that itch to go for something familiar. Like comfort food. We do not want them to be forced on to something obscure at this point. Relevance of games and the Retention of the user base is key here and we will tune accordingly.This stream will be evaluated on Precision@10 and NDCG (already computed above as the baseline)
+
+```{r stream1}
+
+# generate top 10 recommendations for a sample of users
+stream1_recs <- predictions %>%
+  group_by(user_id) %>%
+  arrange(desc(prediction)) %>%
+  slice_head(n = 10) %>%
+  ungroup()
+
+# join game names for display
+stream1_display <- stream1_recs %>%
+  left_join(game_index, by = "game_idx") %>%
+  left_join(games_raw %>% select(boardgame_id, title), by = "boardgame_id") %>%
+  select(user_id, title, prediction) %>%
+  arrange(user_id, desc(prediction))
+
+cat("Stream 1 sample recommendations:\n")
+stream1_display %>% filter(user_id == 1) %>% print()
+```
+
+---
+
+## Stream 2 : Surprise Me
+
+Now this stream would be ALS predictions with popularity penalty applied before ranking. Stream 2 would optimise for novelty and serendipity with a precision as the floor. Popularity = users rated from games metadata, normalized. We tune for a penalty that pushes less rated games up the list without changing predicted ratings
+
+```{r stream2}
+
+# normalize popularity
+game_pop <- games_raw %>%
+  filter(!is.na(usersrated)) %>%
+  mutate(popularity = usersrated / max(usersrated, na.rm = TRUE)) %>%
+  select(boardgame_id, popularity)
+
+# join popularity to predictions via game_index
+predictions_pop <- predictions %>%
+  left_join(game_index, by = "game_idx") %>%
+  left_join(game_pop, by = "boardgame_id") %>%
+  mutate(
+    popularity   = ifelse(is.na(popularity), 0, popularity),
+    # penalty = 2 from project 4 findings -- balances novelty and relevance
+    penalized_score = prediction - 3 * popularity
+  )
+
+# Stream 2 top 10 per user
+stream2_recs <- predictions_pop %>%
+  group_by(user_id) %>%
+  arrange(desc(penalized_score)) %>%
+  distinct(game_idx, .keep_all = TRUE) %>%
+  slice_head(n = 10) %>%
+  ungroup()
+
+stream2_display <- stream2_recs %>%
+  left_join(games_raw %>% select(boardgame_id, title), by = "boardgame_id") %>%
+  select(user_id, title, prediction, penalized_score) %>%
+  arrange(user_id, desc(penalized_score))
+
+cat("Stream 2 sample recommendations:\n")
+stream2_display %>% filter(user_id == 1) %>% print()
+```
+
+---
+
+## Stream Comparison Display
+
+Looking at a simulated comparison for the two streams across three different users 
+
+```{r}
+
+display_users <- c(1, 2, 3)
+
+for (u in display_users) {
+  
+  s1 <- stream1_display %>% 
+    filter(user_id == u) %>%
+    select(title, prediction) %>%
+    rename(`Predicted Rating` = prediction) %>%
+    mutate(`Predicted Rating` = round(`Predicted Rating`, 2))
+  
+  s2 <- stream2_display %>%
+    filter(user_id == u) %>%
+    select(title, prediction, penalized_score) %>%
+    rename(`Predicted Rating` = prediction,
+           `Penalized Score`  = penalized_score) %>%
+    mutate(across(where(is.numeric), ~round(.x, 2)))
+  
+  cat("\n### User", u, "\n")
+  cat("\n**Stream 1 -- Discovery**\n")
+  print(knitr::kable(s1))
+  cat("\n**Stream 2 -- Surprise Me**\n")
+  print(knitr::kable(s2))
+}
+```
+
+---
+
+## Novelty and Diversity Evaluation for Stream 2 (90 seconds)
+
+For stream two we will use 
+* novelty: log inverse popularity  higher means more obscure games
+* diversity: average pairwise category dissimilarity within the top 10
+to undersand how our recommender is doing 
+
+```{r beyond-accuracy}
+
+compute_novelty <- function(game_ids) {
+  pop <- game_pop$popularity[match(game_ids, game_pop$boardgame_id)]
+  mean(-log2(pop + 1e-10), na.rm = TRUE)
+}
+
+# novelty for stream 1 vs stream 2
+novelty_s1 <- stream1_recs %>%
+  left_join(game_index, by = "game_idx") %>%
+  group_by(user_id) %>%
+  summarise(novelty = compute_novelty(boardgame_id)) %>%
+  pull(novelty)
+
+novelty_s2 <- stream2_recs %>%
+  group_by(user_id) %>%
+  summarise(novelty = compute_novelty(boardgame_id)) %>%
+  pull(novelty)
+
+cat("Average novelty : Stream 1 (Discovery)  :", round(mean(novelty_s1, na.rm = TRUE), 4), "\n")
+cat("Average novelty : Stream 2 (Surprise Me):", round(mean(novelty_s2, na.rm = TRUE), 4), "\n")
+
+# precision for stream 2 to confirm minimum floor
+precision_s2 <- c()
+for (u in test_users) {
+  s2_preds <- stream2_recs %>% filter(user_id == u)
+  if (nrow(s2_preds) == 0) next
+  top_k <- s2_preds$game_idx
+  rel   <- predictions %>%
+    filter(user_id == u, rating >= relevant_threshold) %>%
+    pull(game_idx)
+  if (length(rel) == 0) next
+  precision_s2 <- c(precision_s2, sum(top_k %in% rel) / 10)
+}
+
+cat("Precision@10 : Stream 1 (Discovery)  :", round(mean(precision_vals, na.rm = TRUE), 4), "\n")
+cat("Precision@10 : Stream 2 (Surprise Me):", round(mean(precision_s2,   na.rm = TRUE), 4), "\n")
+```
+---
+
+## Serendipity : Stream 2
+
+Serendipity measures whether Stream 2 is surfacing games that are  genuinely outside the user's usual taste profile but still predicted to be good. We define it as games outside the user's top 3 most rated categories that are still predicted >= 7 .To get each user's top 3 categories we look at what they rated highly in the training data and match against the games metadata. Parse categories from games metadata. Boardgamecategory is a string with multiple values separated by commas
+
+```{r}
+
+
+games_cats <- games_raw %>%
+  select(boardgame_id, boardgamecategory) %>%
+  filter(!is.na(boardgamecategory))
+
+# get each user's top 3 categories from their training ratings and join predictions to game categories to find user taste profile
+user_top_cats <- predictions %>%
+  filter(rating >= 7) %>%
+  left_join(game_index, by = "game_idx") %>%
+  left_join(games_cats, by = "boardgame_id") %>%
+  filter(!is.na(boardgamecategory)) %>%
+  group_by(user_id) %>%
+  summarise(top_cats = paste(boardgamecategory, collapse = ",")) %>%
+  ungroup()
+
+# for each user in stream 2 check how many recommendations fall outside their top category profile and are still predicted >= 7
+serendipity_vals <- c()
+
+for (u in test_users) {
+  user_cat_row <- user_top_cats %>% filter(user_id == u)
+  if (nrow(user_cat_row) == 0) next
+  
+  user_cats <- user_cat_row$top_cats[1]
+  
+  u_recs <- stream2_recs %>%
+    filter(user_id == u, prediction >= 7) %>%
+    left_join(games_cats, by = "boardgame_id") %>%
+    filter(!is.na(boardgamecategory))
+  
+  if (nrow(u_recs) == 0) next
+  
+  outside <- sum(sapply(u_recs$boardgamecategory, function(cat) {
+    !grepl(cat, user_cats, fixed = TRUE)
+  }))
+  
+  serendipity_vals <- c(serendipity_vals, outside / 10)
+}
+
+cat("Average serendipity score (Stream 2):", 
+    round(mean(serendipity_vals, na.rm = TRUE), 4), "\n")
+cat("This represents the fraction of top 10 recommendations that are\n")
+cat("outside the user's usual category profile but still predicted >= 7\n")
+```
+
+---
+
+## ALS Parameter Sweep  (7m)
+
+Now we run a systematic sweep anchored on reg_param=0.1 from project 5
+narrowed grid to avoid crashing Spark during knit
+
+```{r param-sweep}
+
+param_grid <- expand.grid(
+  rank      = c(5, 10, 20),
+  max_iter  = c(5, 10),
+  reg_param = c(0.1, 0.5)
+)
+
+param_results <- lapply(1:nrow(param_grid), function(i) {
+  r   <- param_grid$rank[i]
+  it  <- param_grid$max_iter[i]
+  reg <- param_grid$reg_param[i]
+
+  t_start <- Sys.time()
+  model <- ml_als(
+    train_spark,
+    rating_col          = "rating",
+    user_col            = "user_id",
+    item_col            = "game_idx",
+    rank                = r,
+    max_iter            = it,
+    reg_param           = reg,
+    cold_start_strategy = "drop"
+  )
+  t_end <- Sys.time()
+
+  preds <- ml_predict(model, test_spark) %>%
+    filter(!is.na(prediction)) %>%
+    collect() %>%
+    mutate(prediction = pmax(1, pmin(10, prediction)))
+
+  data.frame(
+    rank      = r,
+    max_iter  = it,
+    reg_param = reg,
+    RMSE      = round(rmse(preds$rating, preds$prediction), 4),
+    MAE       = round(mae(preds$rating,  preds$prediction), 4),
+    NMAE      = round(nmae(preds$rating, preds$prediction), 4),
+    Runtime   = round(as.numeric(difftime(t_end, t_start, units = "secs")), 2)
+  )
+})
+
+param_df <- bind_rows(param_results) %>% arrange(NMAE)
+knitr::kable(param_df, caption = "ALS Parameter Sweep")
+```
+
+---
+
+## Stream 2 Penalty Sweep
+
+Now we run another sweep on the parameters to find the best tradeoff penalty 
+
+```{r}
+
+penalty_values <- c(1, 2, 3, 4, 5)
+
+penalty_results <- lapply(penalty_values, function(pen) {
+  
+  recs <- predictions_pop %>%
+    mutate(penalized_score = prediction - pen * popularity) %>%
+    group_by(user_id) %>%
+    arrange(desc(penalized_score)) %>%
+    distinct(game_idx, .keep_all = TRUE) %>%
+    slice_head(n = 10) %>%
+    ungroup()
+  
+  # novelty : popularity is already in the dataframe
+  nov_scores <- recs %>%
+    mutate(pop_val = ifelse(is.na(popularity), 0, popularity)) %>%
+    group_by(user_id) %>%
+    summarise(nov = mean(-log2(pop_val + 1e-10), na.rm = TRUE)) %>%
+    pull(nov)
+  
+  # precision
+  prec <- c()
+  for (u in test_users) {
+    u_recs <- recs %>% filter(user_id == u)
+    if (nrow(u_recs) == 0) next
+    rel <- predictions %>%
+      filter(user_id == u, rating >= relevant_threshold) %>%
+      pull(game_idx)
+    if (length(rel) == 0) next
+    prec <- c(prec, sum(u_recs$game_idx %in% rel) / 10)
+  }
+  
+  data.frame(
+    penalty   = pen,
+    Novelty   = round(mean(nov_scores, na.rm = TRUE), 4),
+    Precision = round(mean(prec,       na.rm = TRUE), 4)
+  )
+})
+
+penalty_df <- bind_rows(penalty_results)
+knitr::kable(penalty_df, caption = "Stream 2 Penalty Sweep: Novelty vs Precision Tradeoff")
+```
+
+
+
+```{r}
+ggplot(penalty_df, aes(x = penalty)) +
+  geom_line(aes(y = Novelty,   colour = "Novelty"),   linewidth = 1.2) +
+  geom_line(aes(y = Precision, colour = "Precision"), linewidth = 1.2) +
+  geom_point(aes(y = Novelty,   colour = "Novelty"),   size = 3) +
+  geom_point(aes(y = Precision, colour = "Precision"), size = 3) +
+  geom_hline(yintercept = 0.15, linetype = "dashed", colour = "red") +
+  ggplot2::annotate("text", x = 1, y = 0.16, label = "Minimum precision floor (0.15)",
+           hjust = 0, colour = "red", size = 3.5) +
+  scale_x_continuous(breaks = penalty_values) +
+  labs(
+    title  = "Stream 2: Novelty vs Precision Across Penalty Values",
+    x      = "Popularity Penalty",
+    y      = "Score",
+    colour = "Metric"
+  ) +
+  theme_minimal()
+```
+
+
+---
+
+## Visualization
+
+```{r plot-accuracy}
+# stream comparison on key metrics
+stream_compare <- data.frame(
+  Stream    = c("Stream 1 -- Discovery", "Stream 2 -- Surprise Me"),
+  Precision = c(round(mean(precision_vals, na.rm = TRUE), 4),
+                round(mean(precision_s2,   na.rm = TRUE), 4)),
+  Novelty   = c(round(mean(novelty_s1, na.rm = TRUE), 4),
+                round(mean(novelty_s2, na.rm = TRUE), 4))
+)
+
+knitr::kable(stream_compare, caption = "Stream 1 vs Stream 2 -- Precision and Novelty")
+
+stream_long <- stream_compare %>%
+  pivot_longer(c(Precision, Novelty), names_to = "Metric", values_to = "Value")
+
+ggplot(stream_long, aes(x = Stream, y = Value, fill = Stream)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~Metric, scales = "free_y") +
+  labs(
+    title = "Stream 1 vs Stream 2: Precision and Novelty Tradeoff",
+    x     = NULL,
+    y     = "Score"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 15, hjust = 1))
+```
+
+```{r plot-params}
+# parameter sweep results
+ggplot(param_df, aes(x = factor(rank), y = NMAE,
+                      colour = factor(reg_param),
+                      group  = factor(reg_param))) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 3) +
+  facet_wrap(~paste("Iterations:", max_iter)) +
+  labs(
+    title  = "ALS Parameter Sweep: NMAE by Rank and Regularization",
+    x      = "Rank",
+    y      = "NMAE",
+    colour = "Regularization"
+  ) +
+  theme_minimal()
+```
+---
+
+
+## Cold Start Simulation
+
+
+The metadata file has game category, mechanics, and complexity weight for all 22,000 games. New games or users with very few ratings will not have enough collaborative signal for ALS to work well. The content layer uses TF-IDF on game categories and mechanics to build item profiles and falls back to content similarity when ALS confidence is low. True cold start users were filtered out when we limited to users with 200+ ratings for memory reasons. As a simulation we can see how the strategy would function on users with fewer than 50 training ratings, lower activity users, and compare ALS precision against content based recommendations for this group
+
+
+```{r}
+
+
+cold_start_ids <- user_rating_counts %>% 
+  filter(n_train_ratings < 50) %>% 
+  pull(user_id)
+
+cat("Simulated cold start users:", length(cold_start_ids), "\n")
+
+# ALS precision for cold start users
+prec_cold_als <- c()
+for (u in cold_start_ids) {
+  user_preds <- predictions %>% filter(user_id == u)
+  if (nrow(user_preds) == 0) next
+  top_k <- user_preds %>% arrange(desc(prediction)) %>% head(10) %>% pull(game_idx)
+  rel   <- predictions %>% filter(user_id == u, rating >= relevant_threshold) %>% pull(game_idx)
+  if (length(rel) == 0) next
+  prec_cold_als <- c(prec_cold_als, sum(top_k %in% rel) / 10)
+}
+
+# content based recommendations for cold start users. # build user profile as weighted average of tfidf vectors of rated games
+prec_cold_cbf <- c()
+
+for (u in cold_start_ids) {
+  # get games this user rated in training
+  user_train <- train_local %>% filter(user_id == u)
+  if (nrow(user_train) == 0) next
+  
+  # map game_idx to boardgame_id
+  user_train_ids <- user_train %>%
+    left_join(game_index, by = "game_idx") %>%
+    filter(boardgame_id %in% rownames(tfidf_mat))
+  
+  if (nrow(user_train_ids) == 0) next
+  
+  # build user profile as rating weighted sum of tfidf vectors
+  profile <- colSums(
+    tfidf_mat[as.character(user_train_ids$boardgame_id), , drop = FALSE] *
+    user_train_ids$rating
+  )
+  
+  if (sum(profile^2) == 0) next
+  
+  # cosine similarity to all games
+  sims <- apply(tfidf_mat, 1, function(item) {
+    denom <- sqrt(sum(profile^2)) * sqrt(sum(item^2))
+    if (denom == 0) return(0)
+    sum(profile * item) / denom
+  })
+  
+  # exclude already rated games
+  rated_bgg_ids <- as.character(user_train_ids$boardgame_id)
+  sims[rated_bgg_ids] <- NA
+  
+  # top 10 by content similarity
+  top_bgg_ids <- as.integer(names(sort(sims, decreasing = TRUE, na.last = NA)[1:10]))
+  
+  # map back to game_idx for precision check
+  top_game_idx <- game_index %>%
+    filter(boardgame_id %in% top_bgg_ids) %>%
+    pull(game_idx)
+  
+  rel <- predictions %>%
+    filter(user_id == u, rating >= relevant_threshold) %>%
+    pull(game_idx)
+  
+  if (length(rel) == 0) next
+  
+  prec_cold_cbf <- c(prec_cold_cbf, sum(top_game_idx %in% rel) / 10)
+}
+
+cold_compare <- data.frame(
+  Method    = c("ALS (lower activity users)", "Content Based (lower activity users)",
+                "ALS (all users)"),
+  Precision = c(round(mean(prec_cold_als, na.rm = TRUE), 4),
+                round(mean(prec_cold_cbf, na.rm = TRUE), 4),
+                round(mean(precision_vals, na.rm = TRUE), 4))
+)
+
+knitr::kable(cold_compare, 
+             caption = "Cold Start Simulation: ALS vs Content Based Precision@10")
+```
+
+
+---
+
+## Disconnect Spark
+
+```{r disconnect}
+spark_disconnect(sc)
+cat("Spark disconnected\n")
+```
+
+---
+
+## Summary and Findings
+
+**Accuracy**
+The ALS model achieved an RMSE of 1.1761, MAE of 0.8889, and NMAE of 0.0988 on a 50% sample of the test set. That puts us just below the 10% NMAE mark which is strong performance on a dataset this size and consistent with what we saw on the smaller BGG subset in projects 4 and 5. All three metrics are well below the random guessing baseline of 0.33 NMAE confirming the model is picking up real signal from the rating patterns.
+
+**Recommender Metrics**
+Beyond accuracy the model achieved a Precision@10 of 0.803, Recall@10 of 0.536, and NDCG of 0.861. The high NDCG tells us the model is not just finding relevant games but putting them near the top of the list which matters a lot in a browsing context where users might only look at the first few results. These metrics are evaluated within the test set predictions rather than across the full catalog so the absolute numbers should be interpreted accordingly, but the consistency across all three metrics suggests the model is producing well ordered and relevant recommendation lists.
+
+**Parameter Sweep**
+The sweep across rank, iterations, and regularization confirmed what we saw in project 5 . Regularization is the parameter that actually matters. reg_param=0.1 dominated the entire top half of results and reg_param=0.5 filled the entire bottom half regardless of rank or iterations. The best configuration was rank=5, max_iter=10, reg_param=0.1 with an NMAE of 0.0979, only marginally better than the default rank=10 we used for the main model. More iterations helped slightly but the gains diminished quickly. The practical takeaway is that getting regularization right matters far more than tuning rank or iterations for this dataset.
+
+**Stream 1 vs Stream 2**
+Stream 1 achieved a novelty score of 3.13 and Precision@10 of 0.803. Stream 2 with a penalty of 3 pushed novelty up to 3.98 ,a 27% increase, while Precision@10 only dropped to 0.749. Both streams stayed well above the 0.15 minimum precision floor set in the planning document which means Stream 2 is surfacing genuinely less mainstream games without losing relevance.
+
+**Seperate Penalty Sweep for Stream 2**
+The penalty sweep across values 1 through 5 showed a clean and consistent tradeoff. Every unit increase in penalty raised novelty by roughly 0.17 while dropping precision by roughly 0.010. At penalty=5 novelty reaches 4.22 and precision is still 0.730, well above the floor. This suggests we could push the penalty even higher if maximizing discovery was the priority. We chose penalty=3 as the default for Stream 2 because it represents a meaningful novelty gain over Stream 1 without sacrificing too much relevance, but the sweep gives the platform a clear dial to adjust depending on how aggressive they want to be about surfacing niche content.
+
+
+**Cold Start Simulation**
+Since aggressive filtering for memory reasons removed true cold start users from the working set, we simulated cold start by treating the 100 users with fewer than 50 training ratings as lower activity users and compared ALS against content based recommendations for this group. ALS still outperformed content based filtering significantly. Precision@10 of 0.270 vs 0.003, even for users with limited rating history. This suggests that even a small number of ratings is enough for ALS to find meaningful collaborative signal, and that pure content based recommendations from TF-IDF alone are not strong enough to serve as a standalone fallback. In a real deployment the content layer would be most valuable for brand new users with zero ratings, which this simulation cannot fully capture. The practical implication is that the cold start threshold for switching to content based recommendations should be set very low, perhaps 3 to 5 ratings, rather than the 10 we proposed in the planning document, and that a hybrid blend rather than a hard switch would likely perform better than either method alone.
+
+**Scale and why Spark was necessary**
+Even after aggressive filtering to users with 200+ ratings and games with 1000+ ratings, the working dataset contained 4.97 million ratings from 16,702 users across 2,486 games. ALS trained in 24 seconds on this data. Running UUCF on 16,702 users the way we did in projects 2 and 4 would require a 16702 x 16702 similarity matrix which at that scale would exceed available RAM entirely. SVD would face the same imputation problem we identified in project 3 filling in missing values across millions of cells before factorization. Spark ALS avoids both problems by distributing the factorization and only learning from observed ratings. The full unfiltered dataset at 15 million ratings and 192,000 users would be even further out of reach for a local R implementation, which is exactly the threshold argument we made in project 5.
+
+**What we could only test online**
+Everything above is offline evaluation. The metric we cannot measure here is whether users actually engage differently with Stream 2 recommendations over time. A user might receive a highly novel recommendation list and ignore it, or they might discover a new favorite game they never would have found otherwise. To test this properly you would need an A/B test where one group sees Stream 1 only and another sees both streams, then track purchase behavior, new game ratings, and return visits over several weeks. NDCG and precision tell us the lists are good but they say nothing about whether the Surprise Me stream is actually changing how users explore the catalog.
+
+---
+
+## References
+
+Kaminskas, M., & Bridge, D. (2016). Diversity, Serendipity, Novelty, and Coverage: A Survey and Empirical Analysis of Beyond-Accuracy Objectives in Recommender Systems. *ACM Transactions on Interactive Intelligent Systems*, 7(1).
+
+BoardGameGeek Dataset: https://www.kaggle.com/datasets/threnjen/board-games-database-from-boardgamegeek
+
+Sparklyr documentation: https://spark.rstudio.com
+
+

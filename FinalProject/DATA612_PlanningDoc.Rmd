@@ -9,7 +9,9 @@ output:
 ---
 
 
-For the final project I am building a hybrid recomender system on the full BoardGameGeek dataset which holds 19 million ratings from 411,000 users across 22,000 games. This is a significant scale up from the Top 2000 subset used in projects 4 and 5, which had around 1 million ratings and 200 sampled users. Im not expecting the algorithms that worked fine on the smaller subset to hold up at this scale and that is the problem Ill be trying to solve.
+## Overview
+
+For the final project I am building a hybrid recommender system on the full BoardGameGeek dataset.15 million ratings from hundreds of thousands of users across 22,000 games, sampled down to approximately 5 million after filtering to active users and well rated games. The system is designed as a board game marketplace analogous to Steam, with two separate recommendation streams serving different user intents rather than one general purpose recommender trying to do everything at once. Basically two landing pages the user can go to depending on their mood at the time, or 2 separate lists that run in the background and populate for each user on the platform, something that is constantly changing to accommodate new interests and new game releases.  
 
 ---
 
@@ -17,80 +19,113 @@ For the final project I am building a hybrid recomender system on the full Board
 
 **Source:** BoardGameGeek Database from Kaggle (https://www.kaggle.com/datasets/threnjen/board-games-database-from-boardgamegeek)
 
-19 million ratings, 411,000 users, 22,000 games
+**Files:**
+* `bgg-15m-reviews.csv` : 15 million ratings with user, game ID, rating, and comment columns
+* `games_detailed_info.csv` : game metadata including title, category, mechanics, complexity weight, year published, min/max players
 
-**Files**
+**After filtering:**
 
-- Ratings file: user, game ID, rating
-- Games metadata file: game ID, title, category, mechanics, average weight, year published, min/max players
+* 5 million ratings
+* 16,000 users
+* 2,500 games
+* Ratings on a 1-10 explicit scale
 
+We already worked with a Top 2000 subset of this data in projects 4 and 5 so the file structure and loading approach are familiar.
 
 ---
 
-## Design
-The plan is a hybrid recomender that combines two approaches:
+## Business Goals and Use Case
 
-**Collaborative Filtering with Spark ALS**
-The core of the system is ALS matrix factorization running on Spark, the same implementation from project 5. At 19 million ratings and 411,000 users a pure R implementation is not viable and the user similarity matrix from UUCF and SVD on the full unsampled matrix would exceed RAM on any typical machine. Spark ALS distributes the computation across workers and handles this scale without needing to sample down. We would be trying to work at a similar scale to the spotify talk engineer who was working with aroung 4 million users.
+The system is designed as a board game marketplace analogous to Steam game store. The core problem is the same one Steam faces, a catalog of 22000 games is too large for users to browse manually, so the recommender is the primary way users discover new things to play. Rather than one general purpose recommender, we let the users choose what they want at any given point in time using two separate streams with different goals:
 
-**Content Based Filtering for Cold Start**
-The metadata file has game category, mechanics, and complexity weight for all 22000 games. New games or users with very few ratings will not have enough collaborative signal for ALS to work well. The content layer would use TF IDF on game categories and mechanics to try and build item profiles and resort back to content similarity when ALS confidence is low. This hybrid that uses collaborative signal when it exists and content features when it does not would be the unique factor for this project along with the scale.
+**Stream 1 : Discovery (Games You Will Love)**
+Focused on surfacing games similar to what the user already likes, optimizing for relevance and retention. A user coming to this stream wants reliable recommendations they are very likely to enjoy. Evaluated on Precision, Recall, and NDCG. Recall matters here. A user who clicks into this stream wants reliable recommendations, not surprises. Getting this right keeps users on the platform and buying games.
 
-For users with enough ratings the final recommendation score will be a weighted blend of the ALS predicted rating and the content similarity score. For cold start users with fewer than 10 ratings the system would fall back  to content based recommendations based on the games they have rated so far.
+**Stream 2 : Surprise Me (Hidden Gems)**
+This stream is about discovery. The goal is to push users toward niche, newer, or underrated games they would never find on their own. A user clicking Surprise Me is opting into being shown something unexpected. Novelty and serendipity are the priority here, with a minimum relevance floor so we are not just showing random obscure games. This stream also handles cold start for newly published games that have few ratings yet, the content based layer surfaces them based on mechanics and category similarity rather than waiting for enough ratings to accumulate. Recall is intentionally lower here, the stream is deliberately not showing mainstream games that would inflate recall, in favor of genuine discovery.
 
+These two streams run off the same underlying ALS model but use different post-processing and ranking logic to serve different user intents.
+
+---
+
+## System Design
+
+**Core: Spark ALS**
+The backbone of both streams is ALS matrix factorization running on Spark. At millions of ratings and tens of thousands of users a pure R implementation is not viable as Ive personally experienced . The UUCF similarity matrix would be On squared in memory and SVD on the full unsampled matrix kill my aging PC. Spark ALS distributes the computation and handles this scale without needing to sample down to a minisule subset. We stil sample down here but thats just to save one time. My PC was able to handle the full 14 million, it was just taking way too long. 
+
+**Content Layer for Cold Start and Stream 2**
+The metadata file has category, mechanics, and complexity weight for all 22000 games. We build TF-IDF vectors from category and mechanics fields and use cosine similarity to find similar games. This layer serves two purposes:
+- Cold start users with very few ratings get content based recommendations until enough collaborative signal accumulates
+- Stream 2 ranking: content features help identify games outside the users usual categories that share underlying mechanics they tend to enjoy
+
+**Stream Logic**
+- Stream 1: ALS predicted ratings ranked by score, no penalty, standard top K
+- Stream 2: ALS predicted ratings with popularity penalty applied before ranking, boosting games with fewer ratings to the top, with content based fallback for cold start users
+
+---
+
+## Hyperparameter Tuning Plan
+
+Parameters are tuned systematically with a clear anchor
+
+**ALS Rank**
+Anchor: rank=10, consistent with SVD k=10 from projects 4 and 5. Project 5 parameter sweep showed rank had less impact than regularization. We experiment with rank = 5, 10, 20.
+
+**ALS Iterations**
+Anchor: max_iter=10. Project 5 showed diminishing returns beyond 10 iterations. We test 5 and 10.
+
+**Regularization**
+The most important parameter based on project 5 findings where reg_param was the clear driver. Anchor: reg_param=0.1. We test 0.1 and 0.5. With a recommender that gets new data constantly we need regularization that keeps the model flexible enough to adapt.
+
+**Popularity Penalty (Stream 2)**
+Tuned separately from the ALS parameters since it only affects Stream 2 ranking not the underlying model. We sweep penalty values 1 through 5 and evaluate novelty vs Precision at each level to find the best tradeoff. The goal is to find the highest penalty that keeps Precision above a minimum floor of 0.15.
+
+**Cold Start Threshold**
+The switchover point from collaborative to content based recommendations tested at different activity levels. We evaluate Precision separately for lower activity users vs warm users to confirm whether the content layer actually helps.
 
 ---
 
 ## Evaluation Plan
 
-Trying to build on feedback from previous projects, Ill try and go beyond prediction error metrics and include a fuller evaluation set
+The evaluation goes beyond standard accuracy metrics to match what each stream is actually trying to achieve.
 
-**Accuracy metrics (same as previous)**
+**Accuracy metrics (Stream 1 and 2)**
+- RMSE, MAE, NMAE on held out test set
 
-- RMSE, MAE, NMAE on a held out test set
-- Evaluated for ALS alone and the hybrid system separately
+**Stream 1 : Discovery metrics**
+- Precision: of the top 10 games recommended how many did the user actually rate highly. Primary metric for a retention focused stream
+- Recall: of all the games the user rated highly how many appeared in the top 10. Matters here because we want the stream to be comprehensive not just accurate
+- NDCG: ranking quality ,  a great recommendation at rank 1 counts more than one at rank 8 for a user browsing quickly
 
-**Recommendation quality metrics**
+**Stream 2 : Surprise Me metrics**
+- Novelty: log inverse popularity, same definition as project 4. Higher means more obscure games being surfaced
+- Serendipity: games outside the users typical category profile that are still predicted to be rated highly. Measures whether Stream 2 is actually surprising users in a good way
+- Precision floor: Stream 2 still needs a relevance check. We report Precision for Stream 2 and aim to keep it above 0.15 even as we optimize for novelty
+- Recall is intentionally deprioritized for Stream 2 . Low recall is expected and acceptable when the goal is discovery not comprehensiveness
 
-- Precision and Recall for each user, generate a top k recommendation list and measure how many of the held out test items appear in it. This is more realistic measure of quality because it reflects what actually gets shown to a user.
-- NDCG to measure ranking quality giving more credit for relevant items appearing higher in the list
-- Diversity is average pairwise dissimilarity within a recommendation list, similar to the novelty analysis in project 4 but measuring within list variety rather than popularity
+**Cold start evaluation**
+Precision@ compared between lower activity users using ALS vs content based recommendations, to show whether the TF-IDF layer actually helps when collaborative signal is limited.
 
-**Parameter tuning**
-
-Rather than fixing parameters at one value the way project 5 did we will run a parameter sweep depending on runtime constraints 
-
-- Rank: 5, 10, 20, 50
-- Iterations: 5, 10, 20
-- Regularization: 0.01, 0.1, 0.5
-
-Report accuracy and runtime for each combination to find the best tradeoff.
-
-**Comparing Runtime across data sizes**
-
-Testing on three data sizes a 10%,50% and the full dataset to plot runtime vs data size. Basically to find  what Spark is actually adding and at what scale it becomes necessary, building on the project 5 conclusion.
+**What makes one recommender better than another for this use case**
+For Stream 1 the answer is Precision@10, Recall@10, and NDCG. A stream that surfaces games users will enjoy, covers most of what they would love, and puts the best ones first is doing its job. For Stream 2 the answer is novelty and serendipity above the precision floor. RMSE alone cannot distinguish between these two goals which is exactly why recommender specific metrics matter.
 
 ---
 
 ## Anticipated Challenges
 
-**Memory and runtime:** The full dataset is around 19 million rows. Copying it into Spark and running ALS will take meaningfully longer than project 5. I'll see how far i can push 
+**Memory and runtime:** The full dataset is 15 million rows. Aggressive filtering is needed to keep Spark from running out of memory in local mode, which may remove most true cold start users from the working set.
 
-**Content feature quality:** The category and mechanics fields in the BGG metadata are strings with multiple values per game. They will need parsing and cleaning before TF-IDF can be applied cleanly.
+**Content feature quality:** The category and mechanics fields contain multiple values per game as strings. They need parsing and cleaning before TF-IDF can be applied cleanly.
 
-**Cold start threshold:** Deciding where to switch from collaborative to content based is a tuning decision. Will experiment with a few thresholds and report which works best.
+**Popularity penalty tuning:** Finding the right penalty level for Stream 2 that balances novelty and relevance requires careful evaluation. Project 4 showed that too aggressive a penalty collapses precision entirely.
+
+**Serendipity measurement:** Hard to measure offline. We define it as games outside the users top category profile that are still predicted above a rating threshold. This would just be an approximation of the real thing which would require online evaluation.
+
 
 ---
 
-## Summary
+## References
 
-So to summarize 
+Kaminskas, M., & Bridge, D. (2016). Diversity, Serendipity, Novelty, and Coverage: A Survey and Empirical Analysis of Beyond-Accuracy Objectives in Recommender Systems. *ACM Transactions on Interactive Intelligent Systems*, 7(1).
 
-- Collaborative filtering with spark ALS with sparklyr 
-- Content feautres would be TF-IDF on category and mechanics 
-- Fallback to content based handles the cold start
-- Evaluation with RMSE, MAE, NMAE, Precision, Recall, NDCG, and Diversity
-- PLatform would be local spark via sparklyr in R 
-
-
-Board games are a sparse recommendation problem compared to something like movies. A typical user on BGG has rated maybe 50 to 100 games out of 22,000 available. That sparsity makes cold start a real problem cos a new game that just launched has no ratings yet but might be a perfect fit for someone based on its mechanics. The hybrid approach should hopefully addresses this and make the system more useful in practice than a pure collaborative filtering approach would be. The scale also means this is a realistic test of when Spark becomes necessary rather than optional. In project 5 Spark was technically overkill for 200 users. At 411,000 users it is not optional anymore.
+BoardGameGeek Dataset: https://www.kaggle.com/datasets/threnjen/board-games-database-from-boardgamegeek
