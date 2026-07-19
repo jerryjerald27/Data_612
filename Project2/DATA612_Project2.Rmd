@@ -252,6 +252,54 @@ knitr::kable(results, caption = "Error Metrics by Algorithm")
 
 ---
 
+## Trying multiple k values 
+
+```{r additionals}
+
+## Effect of k on UUCF Performance
+
+# As per the recommendations for this project we will try and sweep across multiple k values to see where accuracy peaks
+# using UUCF Pearson since that performed the best
+
+k_values <- c(5, 10, 15, 25, 30)
+
+k_results <- lapply(k_values, function(k) {
+  preds <- uucf_predict(pearson_sim, k = k)
+  data.frame(
+    k    = k,
+    RMSE = round(rmse(preds$actual, preds$predicted), 4),
+    MAE  = round(mae(preds$actual,  preds$predicted), 4),
+    NMAE = round(nmae(preds$actual, preds$predicted), 4)
+  )
+})
+
+k_results_df <- bind_rows(k_results)
+knitr::kable(k_results_df, caption = "UUCF Pearson - Performance Across k Values")
+
+
+# plotting NMAE vs k to find the best k 
+ggplot(k_results_df, aes(x = k, y = NMAE)) +
+  geom_line(colour = "#2196F3", linewidth = 1.2) +
+  geom_point(size = 4, colour = "#2196F3") +
+  geom_hline(yintercept = 0.33, linetype = "dashed", colour = "red") +
+  scale_x_continuous(breaks = k_values) +
+  labs(
+    title = "UUCF Pearson: NMAE Across Different k Values",
+    subtitle = "Lower is better -- red line is random guessing baseline",
+    x = "Neighbourhood size (k)",
+    y = "NMAE"
+  ) +
+  theme_minimal()
+
+
+
+```
+
+
+
+
+---
+
 ## Visualization
 
 ```{r plot}
@@ -277,8 +325,6 @@ ggplot(results_long, aes(x = Algorithm, y = Value, fill = Algorithm)) +
 ## Summary and Findings
 
 
-
-
 **How do we know it's working?**
 
 All four algorithms produce NMAE values between 0.165 and 0.176 which is well below the 0.33 baseline you'd get from random guessing on this dataset as shown in the original Jester paper. That's roughly half the error of random guessing, which tells us the models are picking up real signal from the rating patterns.
@@ -294,6 +340,9 @@ RMSE and MAE are both in the original rating scale. Our MAE values are around 3.
 UUCF with Cosine similarity came out on top with the lowest RMSE, MAE and NMAE though the differences between methods are small. From what i know i expected pearson to work better because it accounts for individual rating bias but here cosine worked better so im guessing the bias correction matters less when so many users have rated the same jokes
 
 
+**The K sweep**
+The K sweep showed that performance improves steadily from k=5 up to k=25 where it peaks at an NMAE of 0.1658, then kinda flattens out at k=30 with almost no change. So k at 25 is the sweet spot for this dataset, though anything from k 15 upward gives pretty similar results. The big takeaway is that k at 5 is noticeably worse than the rest so too few neighbors hurts more than using too many neighbours.
+
 **Potential issues:**
 
 As always with these we deal with cold start issues.
@@ -303,7 +352,7 @@ Also the train test split is random. usually with a rating system the training s
 **Possible improvements:**
 
 Bigger sample size whenever possible
-Also possibly different values of k to see where accuracy is higher. I just used K = 15 as per ai recommendation as a general baseline. 
+ 
 
 
 ## References
